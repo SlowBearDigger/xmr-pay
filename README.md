@@ -316,6 +316,24 @@ npm view xmr-pay --json | grep -i provenance
 
 If a signature or hash does not match, do not use the file. Report it.
 
+## Buy me a beer 🍺
+
+If xmr-pay saved you from a payment processor, the tip jar is — of course — an
+`<xmr-pay>` widget pointed at its own author. No account, no fee, no middleman;
+exactly what the library is for.
+
+```html
+<xmr-pay
+  address="42w9YaCW8UwZ2BmQztNmUd6JgYVcjW7LXEMTcQqHdmtFCsSo5RGY2eQg2iZ3WyBSSs63gnhczLkJ46yfr4ojCXWT3H1ZBbR"
+  label="Buy me a beer"></xmr-pay>
+```
+
+Or just send to:
+
+```
+42w9YaCW8UwZ2BmQztNmUd6JgYVcjW7LXEMTcQqHdmtFCsSo5RGY2eQg2iZ3WyBSSs63gnhczLkJ46yfr4ojCXWT3H1ZBbR
+```
+
 ## License
 
 MIT. The widget bundles [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
