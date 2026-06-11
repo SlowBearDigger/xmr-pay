@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>xmr-pay widget — demo (stagenet)</title>
+<style>
+  body { margin:0; background:#0b0b0d; color:#fafafa; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; }
+  .wrap { max-width:1320px; margin:0 auto; padding:32px 22px 64px; }
+  h1 { font-size:19px; letter-spacing:-.01em; }
+  p.sub { font-size:12.5px; color:#a1a1aa; margin:6px 0 30px; line-height:1.6; max-width:880px; }
+  p.sub b { color:#FF6600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(310px,1fr)); gap:34px; align-items:start; }
+  h2 { font-size:11px; text-transform:uppercase; color:#a1a1aa; letter-spacing:.08em; margin:0 0 12px; font-family:ui-monospace,Menlo,monospace; }
+  .note { margin-top:14px; font-size:11px; color:#62626b; line-height:1.6; }
+  code { color:#F26822; font-family:ui-monospace,Menlo,monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>&lt;xmr-pay&gt; — sovereign checkout widget</h1>
+  <p class="sub">one self-hosted file · <b>zero CDN, zero third parties</b> · QR generated locally ·
+     verification against <b>the merchant's own endpoint</b> (live stagenet here) ·
+     two skins: <code>clean</code> (default, universal) and <code>skin="brutal"</code> (GOXMR).</p>
+
+  <div class="grid">
+    <section>
+      <h2>Clean skin (default) — store, live verify</h2>
+      <xmr-pay
+        address="{{SUB}}"
+        amount="0.1"
+        label="Order #demo"
+        order="ord_demo"
+        verify-url="/api/verify-payment"></xmr-pay>
+      <p class="note">universal look: system sans, rounded, soft shadow. order <code>ord_demo</code> expects the
+         real 0.1 XMR faucet payment on stagenet — paste txid + proof under "prove it".</p>
+    </section>
+
+    <section>
+      <h2>Clean skin — tips, light, no backend</h2>
+      <xmr-pay
+        theme="light"
+        address="{{PRIMARY}}"
+        label="Buy me a coffee"></xmr-pay>
+      <p class="note">no <code>verify-url</code> → pure client-side: QR + address + trust info.
+         <code>theme="light"</code>.</p>
+    </section>
+
+    <section>
+      <h2>Brutal skin (GOXMR) — replay defense demo</h2>
+      <xmr-pay
+        skin="brutal"
+        lang="es"
+        address="{{SUB}}"
+        amount="0.1"
+        label="Pedido #2"
+        order="ord_demo2"
+        verify-url="/api/verify-payment"></xmr-pay>
+      <p class="note"><code>skin="brutal" lang="es"</code>. same address + amount as order 1 on purpose:
+         after paying <code>ord_demo</code>, submit the <b>same proof</b> here → rejected as replay.
+         one tx pays exactly one order.</p>
+    </section>
+
+    <section>
+      <h2>Signed config — tamper-evident address</h2>
+      <xmr-pay config="{{SIGNED}}" order="ord_demo3" verify-url="/api/verify-payment"></xmr-pay>
+      <p class="note">address + amount come from a config signed with a key kept off the page.
+         expand the trust panel to see <code>Signed · {{FP}}</code>. a buyer who knows that
+         fingerprint catches an address swap even on a hacked page.</p>
+    </section>
+
+    <section>
+      <h2>Signed config — TAMPERED (address swapped after signing)</h2>
+      <xmr-pay config="{{SIGNED_BAD}}"></xmr-pay>
+      <p class="note">same envelope, address swapped after signing → the signature no longer matches,
+         so the widget refuses to show a payable address and warns instead.</p>
+    </section>
+  </div>
+</div>
+<script src="/widget/xmr-pay.js"></script>
+<script>
+  document.addEventListener('xmr-pay:paid', (e) => console.log('xmr-pay:paid', e.detail));
+  document.addEventListener('xmr-pay:result', (e) => console.log('xmr-pay:result', e.detail));
+</script>
+</body>
+</html>

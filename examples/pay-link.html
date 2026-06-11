@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pay with Monero</title>
+<!-- shareable payment link: host this single page anywhere static and share
+     URLs like  /pay-link.html#address=4...&amount=0.05&label=Invoice%2042
+     params: address (required) · amount · label · verify (verify-url) · lang
+     · theme · skin · config (base64 signed envelope)
+     prefer the #fragment form — fragments never reach server logs or proxies,
+     so the payment details stay between the page and the buyer. plain ?query
+     also works. truly short urls need a lookup somewhere: if you want
+     /p/x7k2-style links, add a redirect on your own server (still self-host). -->
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#09090b; font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; padding:24px; }
+  .err { color:#f87171; font-size:12px; text-transform:uppercase; }
+</style>
+</head>
+<body>
+<script src="/widget/xmr-pay.js"></script>
+<script>
+  const query = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const get = (k) => hash.get(k) ?? query.get(k);   // fragment wins — it never reaches a server
+
+  const address = (get('address') || '').trim();
+  const config = (get('config') || '').trim();
+  if (!config && !/^[1-9A-HJ-NP-Za-km-z]{95}$/.test(address)) {
+    document.body.innerHTML = '<p class="err">missing or invalid address parameter</p>';
+  } else {
+    const el = document.createElement('xmr-pay');
+    if (config) el.setAttribute('config', config);
+    else el.setAttribute('address', address);
+    for (const [param, attr] of [['amount','amount'], ['label','label'], ['order','order'],
+                                 ['verify','verify-url'], ['lang','lang'], ['theme','theme'],
+                                 ['skin','skin'], ['fingerprint','fingerprint'], ['redirect','redirect-url']]) {
+      const v = get(param);
+      if (v) el.setAttribute(attr, v);
+    }
+    document.body.appendChild(el);
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+# manual-trigger template — wire MINISIGN_KEY and NPM_TOKEN secrets, then
+# switch `on:` to push tags ['v*'] for automatic releases. publishes to npm
+# with provenance (ties the package to this repo + commit via Sigstore) and
+# attaches signed SHA256SUMS to the GitHub release.
+name: release
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write      # attach release assets
+  id-token: write      # npm provenance (Sigstore)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm run build
+      - run: npm test --if-present
+
+      # signed checksums
+      - name: minisign
+        run: |
+          sudo apt-get update && sudo apt-get install -y minisign
+          printf '%s' "${{ secrets.MINISIGN_KEY }}" > minisign.key
+          bash scripts/release.sh
+          rm -f minisign.key
+        env:
+          MINISIGN_KEY: minisign.key
+
+      - name: github release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SHA256SUMS
+            SHA256SUMS.minisig
+            widget/xmr-pay.js
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,37 @@
+{
+  "name": "xmr-pay",
+  "version": "0.1.0",
+  "description": "Sovereign Monero payments toolkit. Client-side payment links + QR (core), stateless on-chain proof verification (verify), signed fulfillment webhooks (webhook), and a zero-dependency checkout widget. No accounts, no API keys, no third parties in the payment path.",
+  "main": "src/verify.js",
+  "exports": {
+    ".": "./src/verify.js",
+    "./verify": "./src/verify.js",
+    "./core": "./src/core.js",
+    "./config": "./src/config.js",
+    "./watch": "./src/watch.js",
+    "./webhook": "./src/webhook.js"
+  },
+  "files": ["src", "widget", "examples", "README.md", "LICENSE", "docs"],
+  "license": "MIT",
+  "author": "SlowBearDigger",
+  "repository": { "type": "git", "url": "git+https://github.com/SlowBearDigger/xmr-pay.git" },
+  "homepage": "https://github.com/SlowBearDigger/xmr-pay#readme",
+  "bugs": { "url": "https://github.com/SlowBearDigger/xmr-pay/issues" },
+  "keywords": ["monero", "xmr", "payments", "checkout", "tx-proof", "non-custodial", "serverless", "widget"],
+  "dependencies": {
+    "qrcode-generator": "^1.4.4"
+  },
+  "peerDependencies": {
+    "monero-ts": ">=0.11.0"
+  },
+  "peerDependenciesMeta": {
+    "monero-ts": { "optional": true }
+  },
+  "scripts": {
+    "build": "bash scripts/build-widget.sh",
+    "release": "bash scripts/release.sh",
+    "test": "node test/config.test.js && node test/watch.test.js",
+    "test:live": "node test/live-stagenet.js",
+    "demo": "node examples/demo-server.js"
+  }
+}
