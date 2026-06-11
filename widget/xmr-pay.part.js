@@ -4,7 +4,7 @@
 
 var XP_STR = {
     en: {
-        sendExactly: 'Send exactly', anyAmount: 'Send any amount', awaiting: 'Awaiting payment',
+        sendExactly: 'Send exactly', anyAmount: 'Send any amount', awaiting: 'Awaiting payment', scanToSend: 'Scan or tap to send',
         addrLabel: 'Payment address — click to copy', copied: 'Copied ✓', openWallet: 'Open in wallet',
         trustToggle: 'Non-custodial · verify this payment',
         trustFunds: 'Funds go directly to the merchant’s wallet — this page never holds your money.',
@@ -31,7 +31,7 @@ var XP_STR = {
         disclaimer: 'Verify the address before sending. Monero payments are final and cannot be reversed. This widget is provided as-is, with no warranty.',
     },
     es: {
-        sendExactly: 'Envía exactamente', anyAmount: 'Envía cualquier cantidad', awaiting: 'Esperando pago',
+        sendExactly: 'Envía exactamente', anyAmount: 'Envía cualquier cantidad', awaiting: 'Esperando pago', scanToSend: 'Escanea o toca para enviar',
         addrLabel: 'Dirección de pago — clic para copiar', copied: 'Copiada ✓', openWallet: 'Abrir en wallet',
         trustToggle: 'No-custodial · verifica este pago',
         trustFunds: 'Los fondos van directo a la wallet del comerciante — esta página nunca toca tu dinero.',
@@ -246,7 +246,7 @@ class XmrPay extends HTMLElement {
             '<div class="hd">' +
             '<div class="lbl">' + (amount ? t.sendExactly : t.anyAmount) + (this.getAttribute('label') ? ' · ' + xpEsc(this.getAttribute('label')) : '') + '</div>' +
             (amount ? '<div class="amt">' + xpEsc(amount) + ' XMR</div>' : '') +
-            '<div class="st">● ' + t.awaiting + '</div>' +
+            '<div class="st">' + (verifyUrl ? '● ' + t.awaiting : t.scanToSend) + '</div>' +
             '</div>' +
             '<div class="body">' +
             '<div class="qrwrap"><div class="qr">' + xpQrSvg(this._uri()) + '</div></div>' +
