@@ -54,20 +54,33 @@ function picoToXmr(p) {
 }
 
 // one shared verifier wallet per (node, network) — random keys, no secrets.
-// cached so a warm serverless instance pays the WASM open cost once.
+// cached so a warm serverless instance pays the WASM open cost once. entries
+// expire after WALLET_TTL_MS so a long-running server picks up node changes and
+// never holds a wallet whose daemon connection went stale; checkOnNode also
+// drops the entry on any operation error so the next call rebuilds it.
 const walletCache = new Map();
+const WALLET_TTL_MS = 5 * 60 * 1000;
+function dropWallet(key) {
+    const e = walletCache.get(key);
+    if (e) { clearTimeout(e.timer); walletCache.delete(key); }
+}
 function verifierWallet(nodeUri, networkType) {
     const key = `${networkType}|${nodeUri}`;
-    if (!walletCache.has(key)) {
-        walletCache.set(key, (async () => {
+    let entry = walletCache.get(key);
+    if (!entry) {
+        const promise = (async () => {
             const m = lazyMonero();
             const w = await m.createWalletFull({ networkType, password: '' });
             await w.setDaemonConnection(nodeUri);
             if (!(await w.isConnectedToDaemon())) throw new Error(`node unreachable: ${nodeUri}`);
             return w;
-        })().catch(err => { walletCache.delete(key); throw err; }));
+        })().catch(err => { dropWallet(key); throw err; });
+        const timer = setTimeout(() => dropWallet(key), WALLET_TTL_MS);
+        if (timer.unref) timer.unref();   // a pending eviction must not keep the process alive
+        entry = { promise, timer };
+        walletCache.set(key, entry);
     }
-    return walletCache.get(key);
+    return entry.promise;
 }
 
 function readCheck(c) {
@@ -80,11 +93,20 @@ function readCheck(c) {
 }
 
 async function checkOnNode({ nodeUri, networkType, txid, proofKind, proof, address, message }) {
-    const w = await verifierWallet(nodeUri, networkType);
-    const raw = proofKind === 'txkey'
-        ? await w.checkTxKey(txid, proof, address)
-        : await w.checkTxProof(txid, address, message, proof);
-    return { nodeUri, ...readCheck(raw) };
+    const key = `${networkType}|${nodeUri}`;
+    try {
+        const w = await verifierWallet(nodeUri, networkType);
+        const raw = proofKind === 'txkey'
+            ? await w.checkTxKey(txid, proof, address)
+            : await w.checkTxProof(txid, address, message, proof);
+        return { nodeUri, ...readCheck(raw) };
+    } catch (e) {
+        // a cached wallet whose node dropped would fail every call forever —
+        // evict so the next attempt rebuilds the connection. (a bad proof does
+        // not throw here; checkTx* returns isGood:false, so this is RPC/network.)
+        dropWallet(key);
+        throw e;
+    }
 }
 
 // reject time-locked payments: a custom wallet can craft a tx whose outputs are
@@ -127,10 +149,18 @@ async function fetchUnlockTime(nodes, txid) {
  * @param {number}   [opts.quorum]           default 1; >=2 requires that many nodes to agree
  * @param {string}   [opts.message]          challenge message the proof was generated over (default '')
  * @param {number}   [opts.toleranceXmr]     accepted shortfall, default 0 (exact — keeps amount-nonce meaningful)
+ * @param {boolean}  [opts.skipUnlockTimeCheck] default false; skips the time-lock guard (NOT recommended)
  * @param {function} [opts.alreadyUsed]      async (txid) => boolean — caller's replay check
  *
  * @returns {Promise<{paid:boolean,status:string,reason:string,receivedXmr:number,confirmations:number,txid:string,nodesAgreed:number}>}
  *   status: paid | underpaid | unconfirmed | mempool | no-funds | locked | invalid | replay | node-disagreement
+ *
+ * REPLAY PROTECTION IS THE CALLER'S JOB, AND IT MUST BE ATOMIC. this function
+ * proves a payment is real; it cannot know your order state. back `alreadyUsed`
+ * with a UNIQUE constraint on the stored txid (or a synchronous check-and-claim)
+ * — a plain async read has a TOCTOU window where two concurrent requests with
+ * the same txid both pass and both orders settle. the returned `txid` is
+ * normalized to lowercase; store and compare that form.
  */
 async function verifyPayment(opts) {
     const {
@@ -173,6 +203,9 @@ async function verifyPayment(opts) {
     // that answered agrees — a single disagreeing node trips it, which is the
     // whole point of asking more than one.
     const want = Math.max(1, quorum | 0);
+    if (nodes.length < want) {
+        return fail('invalid', `quorum ${want} needs at least ${want} nodes, but ${nodes.length} provided`);
+    }
     let answers = [], errors = [];
     if (want === 1) {
         for (const nodeUri of nodes) {
@@ -221,7 +254,7 @@ async function verifyPayment(opts) {
     if (!skipUnlockTimeCheck) {
         const unlockTime = await fetchUnlockTime(nodes, id);
         if (unlockTime === null) {
-            return { paid: false, status: 'invalid', reason: 'could not fetch the tx to check unlock_time — retry or add nodes', ...base };
+            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — every node failed to return the tx; not marking paid (add nodes or retry)', ...base };
         }
         if (unlockTime !== 0n) {
             return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable, not accepted`, ...base };

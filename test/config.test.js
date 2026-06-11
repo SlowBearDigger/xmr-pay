@@ -12,7 +12,7 @@ const cfg = { address: '4' + 'A'.repeat(94), amount: '0.05', networkType: 'mainn
 
 const env = signConfig(cfg, merchant.privateKey);
 ok('signs and round-trips', verifyConfig(env).valid);
-ok('fingerprint is stable + readable', /^[0-9a-f]{4}(-[0-9a-f]{4}){3}$/.test(env.fingerprint), env.fingerprint);
+ok('fingerprint is stable + readable (96-bit, 6 groups)', /^[0-9a-f]{4}(-[0-9a-f]{4}){5}$/.test(env.fingerprint), env.fingerprint);
 ok('fingerprint matches the key', env.fingerprint === configFingerprint(merchant.publicKey));
 
 // tamper the address after signing

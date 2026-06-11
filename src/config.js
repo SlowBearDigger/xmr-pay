@@ -34,11 +34,14 @@ function generateSigningKey() {
 }
 
 // short, human-checkable id for a public key — the thing a buyer compares
-// against a known value. four groups of four hex, e.g. a1b2-c3d4-e5f6-7890.
+// against a known value. 96 bits / six groups of four hex, e.g.
+// a1b2-c3d4-e5f6-7890-1234-5678. forging a key whose fingerprint matches a
+// published one is a targeted preimage: 96 bits puts that out of reach, while
+// six short groups still fit on a label or a screen for a human to eyeball.
 function configFingerprint(publicKeyPem) {
     const der = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
     const h = crypto.createHash('sha256').update(der).digest('hex');
-    return h.slice(0, 16).match(/.{4}/g).join('-');
+    return h.slice(0, 24).match(/.{4}/g).join('-');
 }
 
 // sign a config object. only put fields that decide where money goes or how
