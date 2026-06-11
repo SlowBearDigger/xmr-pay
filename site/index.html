@@ -167,6 +167,34 @@
     </div>
   </div></section>
 
+  <section id="detect"><div class="wrap">
+    <div class="head">
+      <span class="lbl">// detecting payments</span>
+      <h2>Two ways. Know which you need.</h2>
+      <p>To know a payment landed you need the view key (to scan) or a proof (from the payer).
+         A static page holds no secret — so detection lives in one of two places.</p>
+    </div>
+    <div class="pieces">
+      <div class="piece">
+        <div class="n">[ serverless ]</div>
+        <h3>Recommended · stores</h3>
+        <p>The buyer submits a tx proof; a free function you deploy (Vercel/Render, Node)
+           re-checks it on-chain and returns paid. The view key never leaves your machine.
+           Private, per-order, real-time. <a href="https://github.com/SlowBearDigger/xmr-pay/blob/main/docs/DEPLOY.md">Deploy guide</a>.</p>
+      </div>
+      <div class="piece">
+        <div class="n">[ client-side ]</div>
+        <h3>Pure static · donations only</h3>
+        <p>Scan in the browser with no backend — but the view key goes public in the page and it
+           syncs a full wallet on every load (heavy, flaky). Acceptable only for a public donation
+           address where every incoming payment being visible is fine. Never for a store.</p>
+      </div>
+    </div>
+    <p style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--mut);margin-top:18px">
+      The tip widget above takes neither path — it just shows the address. A store wires
+      <code style="color:var(--ink)">verify-url</code> to its serverless function.</p>
+  </div></section>
+
   <footer><div class="wrap">
     <div>xmr-pay // MIT // <a href="https://github.com/SlowBearDigger/xmr-pay">github</a> · <a href="https://www.npmjs.com/package/xmr-pay">npm</a> · <a href="https://github.com/SlowBearDigger/xmr-pay/blob/main/SECURITY.md">security</a></div>
     <div class="row2">a <a href="https://goxmr.click">goxmr</a> project · built in the open</div>
