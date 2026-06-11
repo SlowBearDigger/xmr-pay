@@ -147,8 +147,10 @@ function xpCanonical(v) {
 function xpB64ToBytes(b64) { var s = atob(b64); var a = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
 function xpPemToDer(pem) { return xpB64ToBytes(pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '')); }
 async function xpFingerprint(der) {
+    // 12 bytes / 96 bits — must match configFingerprint() in src/config.js, or a
+    // pinned fingerprint never matches what the widget computes.
     var h = new Uint8Array(await crypto.subtle.digest('SHA-256', der));
-    var hex = ''; for (var i = 0; i < 8; i++) hex += h[i].toString(16).padStart(2, '0');
+    var hex = ''; for (var i = 0; i < 12; i++) hex += h[i].toString(16).padStart(2, '0');
     return hex.match(/.{4}/g).join('-');
 }
 async function xpVerifyConfig(env) {
