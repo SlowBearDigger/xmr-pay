@@ -1,0 +1,15 @@
+node_modules/
+.DS_Store
+*.log
+
+# release artifacts live on the releases page, not in the tree
+SHA256SUMS
+SHA256SUMS.minisig
+SHA256SUMS.asc
+
+# never commit signing keys
+minisign.key
+*.key
+
+# local dev harness (stagenet wallet info)
+examples/demo-info.json
