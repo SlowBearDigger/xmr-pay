@@ -13,3 +13,4 @@ minisign.key
 
 # local dev harness (stagenet wallet info)
 examples/demo-info.json
+site/xmr-pay.js
