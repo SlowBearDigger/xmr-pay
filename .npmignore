@@ -1,0 +1,6 @@
+# npm does not apply .gitignore inside "files" allowlisted dirs — be explicit.
+examples/demo-info.json
+*.key
+SHA256SUMS
+SHA256SUMS.minisig
+SHA256SUMS.asc
