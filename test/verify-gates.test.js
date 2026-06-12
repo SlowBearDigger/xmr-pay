@@ -4,7 +4,7 @@
 // against regressions in the cheap rejections.
 //   node test/verify-gates.test.js
 
-const { verifyPayment } = require('../src/verify');
+const { verifyPayment, xmrToPico } = require('../src/verify');
 
 const OK_TXID = 'a'.repeat(64);
 const OK_KEY = 'b'.repeat(64);
@@ -13,6 +13,16 @@ const NODES = ['http://127.0.0.1:1'];        // never contacted in these cases
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`); };
+
+// amount → piconero, the money math that must never drift
+ok('xmrToPico string is exact', xmrToPico('0.05') === 50000000000n);
+ok('xmrToPico keeps a 12-decimal nonce', xmrToPico('0.050000000817') === 50000000817n);
+ok('xmrToPico whole number', xmrToPico('5') === 5000000000000n && xmrToPico(5) === 5000000000000n);
+ok('xmrToPico small NUMBER (was rejected as "1e-8")', xmrToPico(0.00000001) === 10000n);
+ok('xmrToPico zero', xmrToPico(0) === 0n && xmrToPico('0') === 0n);
+try { xmrToPico('0.0000000000001'); ok('xmrToPico rejects 13 decimals', false); }
+catch { ok('xmrToPico rejects 13-decimal string', true); }
+try { xmrToPico('-1'); ok('xmrToPico rejects negative', false); } catch { ok('xmrToPico rejects negative', true); }
 
 (async () => {
     const base = { txid: OK_TXID, proof: OK_KEY, address: MAINNET_ADDR, amount: '0.1', nodes: NODES };
