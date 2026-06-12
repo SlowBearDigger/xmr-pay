@@ -38,6 +38,22 @@ want the "it just detects" experience — the view key lives in *their*
 wallet-rpc, on *their* machine, so it stays sovereign. Many shops will run
 watch for convenience and keep proof as the dispute path.
 
+> **Partial payments are watch-mode only.** A proof verifies exactly one
+> transaction, so proof mode confirms only when a single payment covers the
+> amount — an underpayment stays `underpaid`. If buyers may split a payment
+> across several transactions, use watch mode, which sums transfers to a
+> subaddress.
+
+```
+proof mode (nothing running until checkout):
+  buyer pays ─▶ their wallet makes a tx proof ─▶ widget POSTs {txid, proof}
+            ─▶ YOUR verify function ─▶ verifyPayment re-checks on YOUR nodes ─▶ paid
+
+watch mode (you run monero-wallet-rpc):
+  order ─▶ fresh subaddress ─▶ buyer pays ─▶ your poller hits wallet-rpc
+        ─▶ checkOrder sums the transfers ─▶ paid (handles partial / split payments)
+```
+
 ## 1 · Checkout widget (zero backend to start)
 
 Copy `widget/xmr-pay.js` to your site (one file, ~80 KB, bundles its own QR
@@ -205,9 +221,13 @@ Retries with backoff built in. The browser side additionally gets the
 - **Serve everything over HTTPS** and keep `verify-url` same-origin.
 - **Never take `address` or `amount` from the request body** — always from your
   own order record (the examples already do this).
-- **Your page is the trust root** — if your site is compromised, the displayed
-  address can be swapped. The widget's trust panel gives buyers a human check;
-  signed configs (next section) close it properly.
+- **Your page is the trust root** — if your site is compromised (XSS, a bad
+  dependency, a hacked host), the displayed address can be swapped. For any
+  store handling real money, **use a signed config + a published fingerprint**
+  (next section): the signing key lives off the web server, so a breach can
+  break the config but can't mint a valid one for the attacker's address, and a
+  buyer who knows your fingerprint catches a swap even on a fully owned page.
+  The widget's trust panel is the human fallback when no fingerprint is pinned.
 
 ## Signed config (optional, tamper-evident address)
 

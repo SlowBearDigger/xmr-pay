@@ -73,6 +73,32 @@ requires `Access-Control-Allow-Origin`. The reference handler sets it from
 `CORS_ORIGIN`. Set that to your exact site origin in production; `*` only for a
 public, no-secrets tip endpoint.
 
+## Rate limiting (the endpoint is public)
+
+Anyone can POST to your verify URL, so treat it like any public endpoint.
+
+Two cheap gates already blunt most abuse, **before** any node is contacted:
+the handler rejects an unknown `order_id` (cheap 404) and a malformed proof
+(input validation in `verifyPayment`). What survives both is the costly case:
+a well-formed-but-wrong proof against a real pending order, which forces a node
+RPC. Cap that:
+
+```js
+// per-order attempt cap — crude but effective, pairs with the existing gates
+const attempts = new Map();
+function tooMany(order_id) {
+  const n = (attempts.get(order_id) || 0) + 1;
+  attempts.set(order_id, n);
+  return n > 20;                  // a real buyer needs one or two tries
+}
+// in the handler, before verifyPayment:
+if (tooMany(order_id)) return res.status(429).json({ error: 'too many attempts' });
+```
+
+For real traffic use your platform's rate limiter (Vercel/Cloudflare WAF) or a
+shared store (Upstash/Redis) keyed by IP + order. Orders also expire, so a
+stale order can't be hammered forever.
+
 ## Why not pure client-side?
 
 You can skip the function entirely and scan in the browser — but then the
