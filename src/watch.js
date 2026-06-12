@@ -42,6 +42,10 @@ function createWatcher({ url, accountIndex = 0 } = {}) {
             const rows = [...(r.in || []), ...(r.pool || [])];
             return rows.map(t => ({
                 txid: t.txid,
+                // wallet-rpc returns amount as a JSON number (atomic units). that
+                // is exact below 2^53 piconero (~9007 XMR per transfer); a single
+                // transfer larger than that could lose precision before BigInt
+                // sees it. fine for normal payments; relevant only for whales.
                 amountPico: BigInt(t.amount),
                 confirmations: Number(t.confirmations || 0),
                 inPool: t.type === 'pool',

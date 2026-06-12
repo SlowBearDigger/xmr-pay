@@ -41,10 +41,16 @@ function isValidTxid(t) {
     return typeof t === 'string' && /^[0-9a-f]{64}$/i.test(t);
 }
 
-// exact decimal → piconero, string-parsed so the 12th decimal never falls to
-// float error (amount-nonce lives in those last digits).
+// exact decimal → piconero. strings are taken verbatim so the 12th decimal
+// never falls to float error (amount-nonce lives in those last digits). numbers
+// are accepted too, but a small one (0.00000001) stringifies to "1e-8" which the
+// validator would reject — so convert a number to a plain 12-decimal string
+// first (this caps a number at piconero precision; pass a string for full nonce
+// fidelity).
 function xmrToPico(x) {
-    const s = String(x).trim();
+    const s = typeof x === 'number'
+        ? (Number.isFinite(x) ? x.toFixed(12).replace(/\.?0+$/, '') : 'NaN')
+        : String(x).trim();
     if (!/^\d+(\.\d{1,12})?$/.test(s)) throw new Error(`invalid XMR amount: ${x}`);
     const [i, f = ''] = s.split('.');
     return BigInt(i) * 1000000000000n + BigInt(f.padEnd(12, '0'));
