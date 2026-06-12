@@ -50,6 +50,38 @@ keys.
 | A flood of requests to the verify endpoint | your problem to rate-limit (see docs/DEPLOY.md); unknown/garbage are rejected before any node RPC. |
 | A proof from a seed-restored wallet for an old tx | works if the wallet still holds the tx key; restored wallets often don't (see docs/WALLETS.md). |
 
+## Dependencies
+
+`xmr-pay` itself ships one runtime dependency (`qrcode-generator`) and no known
+CVEs. Payment links, QR, signed configs, and the widget need nothing else.
+
+On-chain verification needs `monero-ts` — a large WASM library, declared as an
+**optional peer dependency**. You only install it for the server-side verify
+function; the buyer-facing checkout never loads it. `monero-ts` pins two old
+transitive dependencies that currently carry advisories:
+
+| Package | Advisory | Reachable here? |
+|---|---|---|
+| `serialize-javascript` `^3.1.0` | High — RCE via crafted object ([GHSA-5c6j-r48x-rmvq](https://github.com/advisories/GHSA-5c6j-r48x-rmvq)) | Low — `monero-ts` serializes wallet state built from *your* keys, not buyer input. |
+| `uuid` `3.3.2` | Moderate — buffer bounds, only when a `buf` arg is passed ([GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq)) | No — `monero-ts` generates ids without a buffer. |
+
+`monero-ts` hasn't bumped them upstream. Patch them in your deployment with npm
+`overrides` — both are drop-in and validated against a real on-chain verify:
+
+```json
+"overrides": {
+  "serialize-javascript": "^7.0.5",
+  "uuid": "^11.1.1"
+}
+```
+
+After `npm install`, `npm audit` reports zero vulnerabilities. The live demo
+(`demo/`) ships these overrides.
+
+Supply-chain scanners (Socket, etc.) also flag `xmr-pay` for "network access"
+and "URL strings": both are by design — verification fetches from Monero nodes,
+and the default node list is literally a list of URLs. Neither is a finding.
+
 ## Verifying releases
 
 Releases are signed with minisign, key pinned in the README:

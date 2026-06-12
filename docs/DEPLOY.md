@@ -13,7 +13,10 @@ Reference handler: [`examples/serverless.js`](../examples/serverless.js).
   uses `monero-ts` (WASM) for verification — that runs in Node serverless, but
   **not on edge runtimes** (Cloudflare Workers / Vercel Edge). Use a Node
   function, not edge.
-- `monero-ts` as a dependency: `npm i xmr-pay monero-ts`.
+- `monero-ts` as a dependency: `npm i xmr-pay monero-ts`. It pins two old
+  transitive deps with advisories (`serialize-javascript`, `uuid`); clear them
+  with npm `overrides` — `{ "serialize-javascript": "^7.0.5", "uuid": "^11.1.1" }`
+  takes `npm audit` to zero. Details: [SECURITY.md](../SECURITY.md#dependencies).
 - Your order store. The example uses an in-memory `Map`; swap it for your real
   database and put a **`UNIQUE` constraint on `tx_hash`** (the atomic replay
   guard).
