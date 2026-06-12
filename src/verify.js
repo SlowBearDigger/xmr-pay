@@ -27,6 +27,15 @@ function lazyMonero() {
     return monerojs;
 }
 
+// loud-but-once guardrail for footguns. a payments lib should make a dangerous
+// opt-out visible in the logs, not silent.
+const _warned = new Set();
+function warnOnce(msg) {
+    if (_warned.has(msg)) return;
+    _warned.add(msg);
+    try { console.warn('[xmr-pay] ' + msg); } catch { /* no console */ }
+}
+
 const ADDR_FIRST_CHAR = {
     mainnet: '[48]',
     stagenet: '[57]',
@@ -179,6 +188,8 @@ async function verifyPayment(opts) {
         skipUnlockTimeCheck = false,
         alreadyUsed = null,
     } = opts || {};
+
+    if (skipUnlockTimeCheck) warnOnce('skipUnlockTimeCheck is on — time-locked (unspendable) payments will be accepted as paid. leave it off unless you know exactly why.');
 
     // normalize the txid: trim + lowercase. monerod treats it case-insensitively,
     // but the caller's replay store does not — without this the same tx in a
