@@ -9,7 +9,8 @@
     "./core": "./src/core.js",
     "./config": "./src/config.js",
     "./watch": "./src/watch.js",
-    "./webhook": "./src/webhook.js"
+    "./webhook": "./src/webhook.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "src",
