@@ -14,7 +14,7 @@ var XP_STR = {
         proveToggle: 'Paid but still waiting? Prove it',
         txidPh: 'Transaction ID (txid)', proofPh: 'Tx key or payment proof',
         proofHint: 'Feather: History → right-click the tx → Create tx proof. GUI: open the tx → “P”. Cake/Monerujo: tx details → transaction key. Paste it all in either box — txid and proof sort themselves out.',
-        verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…',
+        verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard — paste manually',
         paidTitle: 'Payment confirmed', confs: 'confirmations',
         underpaid: 'Received {r} XMR, expected {e}',
         mempool: 'Seen in the mempool — waiting for the first block',
@@ -41,7 +41,7 @@ var XP_STR = {
         proveToggle: '¿Pagaste y sigue esperando? Demuéstralo',
         txidPh: 'ID de transacción (txid)', proofPh: 'Tx key o prueba de pago',
         proofHint: 'Feather: History → clic derecho en la tx → Create tx proof. GUI: abre la tx → “P”. Cake/Monerujo: detalles de la tx → transaction key. Pega todo en cualquier caja — txid y prueba se acomodan solos.',
-        verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…',
+        verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles — pega a mano',
         paidTitle: 'Pago confirmado', confs: 'confirmaciones',
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
         mempool: 'Visto en el mempool — esperando el primer bloque',
@@ -105,6 +105,9 @@ var XP_CSS = [
     '.go{width:100%;background:var(--xp-btn-bg);color:var(--xp-btn-fg);border:var(--xp-bw-in) solid transparent;border-radius:var(--xp-radius-sm);font-family:var(--xp-font);font-size:12px;',
     'font-weight:800;text-transform:var(--xp-case);letter-spacing:var(--xp-track);padding:10px;cursor:pointer;}',
     '.go:hover{background:var(--xp-btn-hv);color:#fff;} .go:disabled{opacity:.45;cursor:not-allowed;}',
+    '.prow{display:flex;gap:8px;} .prow .verify{flex:1;} .prow .paste{flex:0 0 auto;width:auto;padding-left:16px;padding-right:16px;background:transparent;color:var(--xp-fg);border-color:var(--xp-border);}',
+    '.prow .paste:hover{background:var(--xp-accent);color:#fff;border-color:var(--xp-accent);}',
+    ':host *:focus-visible{outline:2px solid var(--xp-accent);outline-offset:2px;}',
     ':host([skin=brutal]) .wallet,:host([skin=brutal]) .go{border-color:var(--xp-border);}',
     '.res{margin-top:7px;font-size:10px;font-weight:700;} .res.bad{color:var(--xp-red);} .res.mid{color:var(--xp-yellow);}',
     '.hint{margin-top:7px;font-size:9px;color:var(--xp-muted);line-height:1.5;}',
@@ -128,7 +131,7 @@ function xpQrSvg(text) {
         rects += '<rect x="' + (c + q) * s + '" y="' + (r + q) * s + '" width="' + s + '" height="' + s +
             '" fill="' + (fin(r, c) ? '#000' : '#F26822') + '"/>';
     }
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges">' + rects + '</svg>';
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges" role="img" aria-label="Monero payment QR code">' + rects + '</svg>';
 }
 
 function xpEsc(s) {
@@ -252,11 +255,11 @@ class XmrPay extends HTMLElement {
             '<div class="qrwrap"><div class="qr">' + xpQrSvg(this._uri()) + '</div></div>' +
             '<div class="sec">' +
             '<div class="lbl" style="margin-bottom:4px">' + t.addrLabel + '</div>' +
-            '<button class="addr" type="button"><b>' + fpHead + '</b>' + fpMid + '<b>' + fpTail + '</b></button>' +
+            '<button class="addr" type="button" aria-label="' + t.addrLabel + '"><b>' + fpHead + '</b>' + fpMid + '<b>' + fpTail + '</b></button>' +
             '<a class="wallet" href="' + xpEsc(this._uri()) + '">' + t.openWallet + '</a>' +
             '</div>' +
             '<div class="sec">' +
-            '<button class="tgl trust-toggle" type="button"><span>⛨ ' + t.trustToggle + '</span><span class="car">▾</span></button>' +
+            '<button class="tgl trust-toggle" type="button" aria-expanded="false"><span>⛨ ' + t.trustToggle + '</span><span class="car">▾</span></button>' +
             '<div class="fold trust-body hidden">' +
             (sign.state === 'ok'
                 ? '<p style="color:var(--xp-green)"><b>⛨ ' + t.signedBy.replace('{fp}', xpEsc(sign.fp)) + '</b></p>'
@@ -269,12 +272,15 @@ class XmrPay extends HTMLElement {
             '<p class="hint" style="border-top:1px solid var(--xp-input);padding-top:8px;margin-top:4px">' + t.disclaimer + '</p>' +
             '</div>' +
             (verifyUrl ?
-                '<button class="tgl prove-toggle" type="button"><span>' + t.proveToggle + '</span><span class="car">▾</span></button>' +
+                '<button class="tgl prove-toggle" type="button" aria-expanded="false"><span>' + t.proveToggle + '</span><span class="car">▾</span></button>' +
                 '<div class="fold prove-body hidden">' +
-                '<input class="in txid" spellcheck="false" placeholder="' + t.txidPh + '">' +
-                '<textarea class="in proof" rows="2" spellcheck="false" placeholder="' + t.proofPh + '"></textarea>' +
+                '<input class="in txid" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="' + t.txidPh + '" placeholder="' + t.txidPh + '">' +
+                '<textarea class="in proof" rows="2" spellcheck="false" autocapitalize="off" aria-label="' + t.proofPh + '" placeholder="' + t.proofPh + '"></textarea>' +
+                '<div class="prow">' +
+                '<button class="go paste" type="button">' + t.pasteBtn + '</button>' +
                 '<button class="go verify" type="button">' + t.verifyBtn + '</button>' +
-                '<p class="res hidden"></p>' +
+                '</div>' +
+                '<p class="res hidden" role="status" aria-live="polite"></p>' +
                 '<p class="hint">' + t.proofHint + '</p>' +
                 '</div>'
                 : '') +
@@ -301,7 +307,8 @@ class XmrPay extends HTMLElement {
 
         root.querySelectorAll('.tgl').forEach(function (tgl) {
             tgl.addEventListener('click', function () {
-                tgl.classList.toggle('open');
+                var open = tgl.classList.toggle('open');
+                tgl.setAttribute('aria-expanded', open ? 'true' : 'false');
                 var body = tgl.nextElementSibling;
                 if (body) body.classList.toggle('hidden');
             });
@@ -314,18 +321,40 @@ class XmrPay extends HTMLElement {
         // block with txid + address + signature. accept the whole thing in
         // either box and sort the pieces out.
         var txidIn = root.querySelector('.txid'), proofIn = root.querySelector('.proof');
+        var split = function (el) {
+            var v = el.value;
+            if (!v || v.length < 70) return;
+            var proof = (v.match(/(?:Out|In)Proof[Vv]?\d?[1-9A-HJ-NP-Za-km-z]{40,}/) || [null])[0];
+            var hexes = v.match(/\b[0-9a-fA-F]{64}\b/g) || [];
+            var txid = hexes[0] || null;
+            var key = proof || (hexes.length > 1 ? hexes[1] : null);
+            if (txid && key && txid !== key) { txidIn.value = txid.toLowerCase(); proofIn.value = key; }
+        };
         if (txidIn && proofIn) {
-            var split = function (el) {
-                var v = el.value;
-                if (!v || v.length < 70) return;
-                var proof = (v.match(/(?:Out|In)Proof[Vv]?\d?[1-9A-HJ-NP-Za-km-z]{40,}/) || [null])[0];
-                var hexes = v.match(/\b[0-9a-fA-F]{64}\b/g) || [];
-                var txid = hexes[0] || null;
-                var key = proof || (hexes.length > 1 ? hexes[1] : null);
-                if (txid && key && txid !== key) { txidIn.value = txid.toLowerCase(); proofIn.value = key; }
-            };
             [txidIn, proofIn].forEach(function (el) { el.addEventListener('input', function () { split(el); }); });
         }
+
+        // mobile-friendly: read the clipboard and let smart-split sort it. needs
+        // a user gesture + HTTPS; falls back to a hint if the browser refuses.
+        var pasteBtn = root.querySelector('.paste');
+        if (pasteBtn && txidIn && proofIn) {
+            pasteBtn.addEventListener('click', function () {
+                if (!navigator.clipboard || !navigator.clipboard.readText) { self._showRes(root, t.pasteFail, 'bad'); return; }
+                navigator.clipboard.readText().then(function (text) {
+                    if (!text) return;
+                    proofIn.value = text.trim();
+                    split(proofIn);
+                    proofIn.focus();
+                }, function () { self._showRes(root, t.pasteFail, 'bad'); });
+            });
+        }
+    }
+
+    _showRes(root, msg, kind) {
+        var res = root.querySelector('.res');
+        if (!res) return;
+        res.textContent = msg;
+        res.className = 'res ' + (kind || '');
     }
 
     async _verify(root, verifyUrl, t) {

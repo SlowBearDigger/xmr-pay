@@ -14,10 +14,12 @@ function picoToXmrString(pico) {
 }
 
 // unique per-order amount: base + random 1..(10^digits - 1) piconero. the
-// on-chain amount then identifies the order, so a payment proof can only fit
-// its own order — anti-replay without shared state. the added value is dust
-// (digits=4 → at most 0.000000009999 XMR).
-function makeAmountNonce(baseXmr, { digits = 4 } = {}) {
+// on-chain amount helps a payment proof structurally fit only its own order.
+// it is a SECONDARY guard — the primary anti-replay is the caller's txid dedup
+// (alreadyUsed). default digits=6 gives ~10^6 distinct amounts (collisions stay
+// rare into the thousands of orders) for at most 0.000000999999 XMR of dust;
+// raise it for very high volume.
+function makeAmountNonce(baseXmr, { digits = 6 } = {}) {
     if (!Number.isInteger(digits) || digits < 1 || digits > 8) throw new Error('digits must be an integer 1..8');
     const span = 10 ** digits - 1;                 // nonce in 1..span piconero
     const g = (typeof globalThis !== 'undefined' && globalThis.crypto) || require('crypto').webcrypto;
