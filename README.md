@@ -1,8 +1,20 @@
-# xmr-pay
+<p align="center">
+  <img src="https://raw.githubusercontent.com/SlowBearDigger/xmr-pay/main/assets/monero-symbol.png" width="76" alt="Monero">
+</p>
 
-Sovereign Monero payments toolkit — "Stripe, but serverless and nobody's
-customer". Accept XMR with payment links, QR codes, an embeddable checkout
-widget, and stateless on-chain proof verification.
+<h1 align="center">xmr-pay</h1>
+
+<p align="center">
+  <b>Sovereign Monero payments</b> — Stripe, but serverless and nobody's customer.<br>
+  Payment links, QR codes, an embeddable checkout widget, and stateless on-chain proof verification.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/xmr-pay"><img src="https://img.shields.io/npm/v/xmr-pay?color=FF6600&label=npm" alt="npm version"></a>
+  <img src="https://img.shields.io/badge/license-MIT-FF6600" alt="MIT license">
+  <img src="https://img.shields.io/badge/runtime%20deps-1-FF6600" alt="one runtime dependency">
+  <img src="https://img.shields.io/badge/releases-signed-FF6600" alt="signed releases">
+</p>
 
 **No accounts. No API keys. No CDN. No third party in the payment path.**
 You hold the address, you choose the nodes, you run the (tiny, optional)
@@ -129,8 +141,9 @@ const amount = makeAmountNonce('0.05');   // '0.050000004821' — unique per ord
 ```
 
 The random piconero tail makes each order's on-chain amount unique, so a
-payment proof only fits its own order — anti-replay without any shared state.
-The added value is dust (≤ 0.00000001 XMR).
+payment proof structurally fits only its own order — a secondary anti-replay
+guard on top of your txid dedup. The added value is dust (default ≤ 0.000001
+XMR; tune with `{ digits }`).
 
 ## 4 · Verification (the only server piece — yours)
 
