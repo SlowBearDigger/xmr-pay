@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cp node_modules/xmr-pay/widget/xmr-pay.js public/xmr-pay.js",
+  "outputDirectory": "public",
+  "functions": {
+    "api/verify-payment.js": { "maxDuration": 60 }
+  }
+}

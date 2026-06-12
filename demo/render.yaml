@@ -1,0 +1,12 @@
+# Render Blueprint — point a new Blueprint at this folder to deploy the demo.
+services:
+  - type: web
+    name: xmr-pay-demo
+    runtime: node
+    rootDir: demo
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: node server.js
+    envVars:
+      - key: XMR_NETWORK
+        value: stagenet

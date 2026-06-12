@@ -296,13 +296,19 @@ return the transaction. The exposure is closed at the connection level instead:
 
 ## Demo
 
+A complete, deployable demo lives in [`demo/`](demo/): a stagenet store
+checkout that verifies a real payment on-chain, plus a mainnet tip widget with
+no backend. Run it or host it (Render/Fly/VPS/Vercel) — see
+[demo/README.md](demo/README.md).
+
 ```
-npm run demo     # http://localhost:8771 — live stagenet verification
+cd demo && npm install && npm start    # http://localhost:8780
 ```
 
-Five widgets: both skins, signed config, a tampered config (refuses to render
-a payable address), and a replay-defense pair — all against a real stagenet
-verify endpoint.
+Click **Try it** and a real stagenet proof is verified live by the function
+running on that deploy. There's also a developer-focused multi-widget page
+(both skins, signed/tampered config, replay defense) under
+[`examples/`](examples/) via `npm run demo`.
 
 ## Validated
 

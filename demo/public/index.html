@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>xmr-pay // live demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23FF6600'/><text x='16' y='24' font-size='22' text-anchor='middle' fill='black' font-family='monospace' font-weight='800'>x</text></svg>" />
+<style>
+  :root{ --o:#FF6600; --bg:#0a0a0b; --pan:#141416; --ink:#fafafa; --mut:#8b8d93; --line:#fafafa; }
+  *{ box-sizing:border-box; margin:0; }
+  body{ background:var(--bg); color:var(--ink); font-family:'Space Grotesk',system-ui,sans-serif; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .mono{ font-family:'JetBrains Mono',ui-monospace,monospace; }
+  a{ color:var(--o); } a:hover{ text-decoration:underline; }
+  .wrap{ max-width:980px; margin:0 auto; padding:0 22px; }
+  .lbl{ font-family:'JetBrains Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--mut); }
+  header{ border-bottom:2px solid var(--line); padding:18px 0; }
+  header .wrap{ display:flex; align-items:center; gap:11px; }
+  .mark{ width:30px; height:30px; background:var(--o); border:2px solid var(--line); display:grid; place-items:center; font-family:'JetBrains Mono',monospace; font-weight:800; color:#000; }
+  header b{ font-family:'JetBrains Mono',monospace; font-weight:800; font-size:16px; letter-spacing:-.03em; }
+  header .sp{ flex:1; }
+  header a{ font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; text-transform:uppercase; }
+  .intro{ padding:40px 0 10px; }
+  .intro h1{ font-family:'JetBrains Mono',monospace; font-size:clamp(24px,4.5vw,38px); text-transform:uppercase; letter-spacing:-.03em; font-weight:800; margin-top:12px; }
+  .intro p{ color:var(--mut); max-width:620px; margin-top:14px; }
+  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:40px; padding:40px 0 60px; align-items:start; }
+  @media(max-width:820px){ .grid{ grid-template-columns:1fr; } }
+  .col h2{ font-family:'JetBrains Mono',monospace; font-size:14px; text-transform:uppercase; letter-spacing:.03em; }
+  .col p{ color:var(--mut); font-size:14px; margin-top:8px; }
+  .try{ font-family:'JetBrains Mono',monospace; font-weight:800; text-transform:uppercase; font-size:12px; letter-spacing:.04em;
+        background:var(--o); color:#000; border:2px solid var(--o); padding:11px 16px; cursor:pointer; margin:16px 0; }
+  .try:hover{ background:#000; color:var(--o); }
+  .widgetwrap{ margin-top:8px; }
+  .note{ font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--mut); line-height:1.7; margin-top:14px; border-top:1px solid #26272c; padding-top:12px; }
+  .note code{ color:var(--ink); }
+  .warn{ border:2px solid var(--o); padding:14px 16px; margin:0 0 10px; }
+  .warn .lbl{ color:var(--o); } .warn p{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#cdb79a; margin-top:6px; line-height:1.7; }
+  footer{ border-top:2px solid var(--line); padding:22px 0 40px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--mut); }
+</style>
+</head>
+<body>
+  <header><div class="wrap">
+    <div class="mark">x</div><b>xmr-pay</b><span class="lbl" style="border:1px solid var(--mut);padding:2px 7px">live demo</span>
+    <span class="sp"></span>
+    <a href="https://github.com/SlowBearDigger/xmr-pay">github</a>&nbsp;&nbsp;<a href="https://www.npmjs.com/package/xmr-pay">npm</a>
+  </div></header>
+
+  <section class="intro"><div class="wrap">
+    <span class="lbl">// this whole thing is one library + one function you host</span>
+    <h1>Accept Monero, verified on-chain</h1>
+    <p>The checkout on the left is a real <span class="mono">&lt;xmr-pay&gt;</span> widget. Click <b>Try it</b> and the
+       buyer's proof is verified <b>live against stagenet nodes</b> by a function running on this very deploy — no
+       account, no third party. The tip jar on the right is a mainnet address with no backend at all.</p>
+  </div></section>
+
+  <div class="wrap"><div class="grid">
+    <section class="col">
+      <h2>Store checkout — stagenet, live verify</h2>
+      <p>A 0.1 XMR order. The "Try it" button fills a real payment proof and submits it to the verify function.</p>
+      <button class="try" id="try">▶ Try it — verify a real payment</button>
+      <div class="widgetwrap">
+        <xmr-pay
+          skin="brutal"
+          address="75a4WYbeKsdGjdFHqxpgNMSi3oqb1z9yx9m6qvNt3ZbTBpoFnD7EqicUZtCVsQoNPKXF5cMcTLJaTCkYiZVzddby9zc7bFV"
+          amount="0.1"
+          label="Demo order"
+          order="ord_demo"
+          verify-url="/api/verify-payment"></xmr-pay>
+      </div>
+      <p class="note">cold start: the verifier loads a Monero WASM wallet on its first call, so the very first
+         verification can take ~20s; after that it's quick.</p>
+    </section>
+
+    <section class="col">
+      <h2>Tips — mainnet, no backend</h2>
+      <p>Just an address + QR. Nothing to verify, nothing running. Scan to support the project (optional).</p>
+      <div class="widgetwrap" style="margin-top:35px">
+        <xmr-pay
+          skin="brutal"
+          address="42w9YaCW8UwZ2BmQztNmUd6JgYVcjW7LXEMTcQqHdmtFCsSo5RGY2eQg2iZ3WyBSSs63gnhczLkJ46yfr4ojCXWT3H1ZBbR"
+          label="Buy me a beer"></xmr-pay>
+      </div>
+    </section>
+  </div></div>
+
+  <div class="wrap">
+    <div class="warn">
+      <span class="lbl">// demo, not financial advice</span>
+      <p>This is a stagenet demo of MIT software, "as is". On a real store you verify against nodes you trust,
+         scale confirmations to the amount, and persist orders in your own database. You run it; you own the risk.</p>
+    </div>
+  </div>
+
+  <footer><div class="wrap">xmr-pay // MIT // a goxmr project · the checkout above is the actual library, nothing faked</div></footer>
+
+  <script src="/xmr-pay.js"></script>
+  <script>
+    var DEMO_TXID = '787a2f62d9dfec8b06e9cfbae7e2714c6109d60f66d39d7d8f06e9886af24525';
+    var DEMO_PROOF = 'InProofV2Ew5hfsLrjdgW4nM13ctRu16SjzrbkPLxqSG3LwShzmeaihLci59yPS31f6Ab6wyu23JVTV8JjZFEmb76Q3rD1fBJ65a4dxUnmKTL9CAeutcZdGGtdzjoTaWWTbHJsvMp6VCT';
+    document.getElementById('try').addEventListener('click', function () {
+      var w = document.querySelector('xmr-pay[order="ord_demo"]'); var sh = w.shadowRoot;
+      var toggle = sh.querySelector('.prove-toggle'), body = sh.querySelector('.prove-body');
+      if (body && body.classList.contains('hidden')) toggle.click();   // open if closed
+      sh.querySelector('.txid').value = DEMO_TXID;
+      sh.querySelector('.proof').value = DEMO_PROOF;
+      sh.querySelector('.verify').click();
+      w.scrollIntoView({ block: 'center' });
+    });
+    document.addEventListener('xmr-pay:paid', function (e) { console.log('xmr-pay:paid', e.detail); });
+  </script>
+</body>
+</html>

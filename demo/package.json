@@ -1,0 +1,14 @@
+{
+  "name": "xmr-pay-demo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Live demo of xmr-pay — a stagenet gateway checkout that verifies on-chain, plus a mainnet tip widget.",
+  "scripts": {
+    "build": "cp node_modules/xmr-pay/widget/xmr-pay.js public/xmr-pay.js",
+    "start": "npm run build && node server.js"
+  },
+  "dependencies": {
+    "xmr-pay": "^0.1.7",
+    "monero-ts": "^0.11.0"
+  }
+}
