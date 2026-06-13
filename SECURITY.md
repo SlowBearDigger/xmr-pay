@@ -82,6 +82,13 @@ transitive dependencies that currently carry advisories:
 After `npm install`, `npm audit` reports zero vulnerabilities. The live demo
 (`demo/`) ships these overrides.
 
+**Or skip `monero-ts` entirely.** If you run a `monero-wallet-rpc`,
+`verifyPaymentViaRpc` (`xmr-pay/watch`) verifies the same proofs through its
+`check_tx_key` / `check_tx_proof` over JSON-RPC — no WASM peer, so none of the
+advisories above are in your tree at all. It shares the exact same gates as
+`verifyPayment` (amount math, time-lock, replay), via a common `classifyResult`,
+so the two transports never disagree on what counts as paid.
+
 Supply-chain scanners (Socket, etc.) also flag `xmr-pay` for "network access"
 and "URL strings": both are by design — verification fetches from Monero nodes,
 and the default node list is literally a list of URLs. Neither is a finding.

@@ -54,7 +54,7 @@
   "scripts": {
     "build": "bash scripts/build-widget.sh",
     "release": "bash scripts/release.sh",
-    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/watch.test.js && node test/webhook.test.js",
+    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js",
     "test:live": "node test/live-stagenet.js",
     "demo": "node examples/demo-server.js"
   }
