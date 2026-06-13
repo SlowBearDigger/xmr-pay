@@ -40,6 +40,7 @@ keys.
 | You try | Expected |
 |---|---|
 | A tx with `unlock_time` set (funds frozen) | `locked` — never `paid`. Fails closed if no node returns the tx. |
+| A node that lies about `unlock_time` (reports `0` for a frozen tx) | caught under `quorum: 2+` — the unlock check is quorum'd like the proof step, so one disagreeing node trips it (fail closed). The tx hash in the daemon reply is also cross-checked against the txid. Run your own node first regardless. |
 | The same valid proof on a second order | `replay` (via `alreadyUsed`) and/or `underpaid` (via amount-nonce). |
 | An amount off by one piconero | `underpaid` — comparison is integer piconero. |
 | A proof for a payment to a different address | rejected — proofs are address-bound. |

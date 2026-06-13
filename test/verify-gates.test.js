@@ -4,7 +4,7 @@
 // against regressions in the cheap rejections.
 //   node test/verify-gates.test.js
 
-const { verifyPayment, xmrToPico } = require('../src/verify');
+const { verifyPayment, xmrToPico, fetchUnlockTime } = require('../src/verify');
 
 const OK_TXID = 'a'.repeat(64);
 const OK_KEY = 'b'.repeat(64);
@@ -63,6 +63,49 @@ try { xmrToPico('-1'); ok('xmrToPico rejects negative', false); } catch { ok('xm
     // see one canonical form).
     r = await verifyPayment({ ...base, txid: OK_TXID.toUpperCase(), nodes: [] });
     ok('returned txid is lowercased', r.txid === OK_TXID);
+
+    // ---- C-1: the time-lock gate must honor the SAME quorum as the proof step.
+    // a single lying node reporting unlock_time=0 for a frozen tx must NOT flip
+    // locked -> paid. these mock /get_transactions per node and inject
+    // disagreeing unlock_time answers (the report's "inject disagreeing unlock").
+    const LOCK = 3000000n;                       // any non-zero unlock_time = time-locked
+    // map value: bigint = unlock_time it reports · 'down' = throws · 'fail' = HTTP 500
+    //            ['wrongtx', v] = reports v but with a mismatched tx_hash
+    const fakeNodes = (map) => {
+        const prev = global.fetch;
+        global.fetch = async (url, opts) => {
+            const uri = String(url).replace(/\/get_transactions$/, '');
+            const reqTxid = JSON.parse(opts.body).txs_hashes[0];
+            const v = map[uri];
+            if (v === 'down') throw new Error('ECONNREFUSED');
+            if (v === 'fail') return { ok: false, json: async () => ({}) };
+            let txHash = reqTxid, unlock = v;
+            if (Array.isArray(v) && v[0] === 'wrongtx') { txHash = 'f'.repeat(64); unlock = v[1]; }
+            return { ok: true, json: async () => ({ txs: [{ tx_hash: txHash, as_json: JSON.stringify({ unlock_time: Number(unlock) }) }] }) };
+        };
+        return () => { global.fetch = prev; };
+    };
+    const withNodes = async (map, fn) => { const undo = fakeNodes(map); try { return await fn(); } finally { undo(); } };
+
+    ok('unlock q1: node says 0 → 0n (unlocked)',
+        (await withNodes({ 'http://a': 0n }, () => fetchUnlockTime(['http://a'], OK_TXID))) === 0n);
+    ok('unlock q1: node says locked → returns the lock',
+        (await withNodes({ 'http://a': LOCK }, () => fetchUnlockTime(['http://a'], OK_TXID))) === LOCK);
+    ok('unlock q1: first node down → falls through to next',
+        (await withNodes({ 'http://a': 'down', 'http://b': 0n }, () => fetchUnlockTime(['http://a', 'http://b'], OK_TXID))) === 0n);
+    ok('unlock q2: both honest say 0 → 0n',
+        (await withNodes({ 'http://a': 0n, 'http://b': 0n }, () => fetchUnlockTime(['http://a', 'http://b'], OK_TXID, 2))) === 0n);
+    // THE FIX — a lying node (0) cannot outvote honest nodes (locked):
+    ok('unlock q2: lying 0 vs honest locked → null, NOT 0 (C-1 fix)',
+        (await withNodes({ 'http://a': 0n, 'http://b': LOCK, 'http://c': LOCK }, () => fetchUnlockTime(['http://a', 'http://b', 'http://c'], OK_TXID, 2))) === null);
+    ok('unlock q2: disagreement in any position → null (fail closed)',
+        (await withNodes({ 'http://a': LOCK, 'http://b': 0n, 'http://c': LOCK }, () => fetchUnlockTime(['http://a', 'http://b', 'http://c'], OK_TXID, 2))) === null);
+    ok('unlock q2: only 1 node answers → null (cannot reach quorum)',
+        (await withNodes({ 'http://a': 0n, 'http://b': 'down', 'http://c': 'down' }, () => fetchUnlockTime(['http://a', 'http://b', 'http://c'], OK_TXID, 2))) === null);
+    ok('unlock: node returns a different tx_hash → null (substitution blocked)',
+        (await withNodes({ 'http://a': ['wrongtx', 0n] }, () => fetchUnlockTime(['http://a'], OK_TXID))) === null);
+    ok('unlock: no node returns the tx → null (fail closed)',
+        (await withNodes({ 'http://a': 'down', 'http://b': 'fail' }, () => fetchUnlockTime(['http://a', 'http://b'], OK_TXID))) === null);
 
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
