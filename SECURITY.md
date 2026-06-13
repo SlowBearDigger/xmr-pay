@@ -48,6 +48,7 @@ keys.
 | A node that lies about confirmations / existence | denial fails closed; over-reporting is caught by `quorum: 2+`. |
 | Mempool / 0-conf tx | `mempool`/`unconfirmed` unless `minConfirmations: 0`. |
 | Pasting an address or amount into the request body | ignored — both come from your order record, not the request. |
+| Faking "paid" in the browser — forging the `xmr-pay:paid` event, editing the DOM, or pointing `verify-url` at a fake server | cosmetic. The widget runs in the buyer's browser and decides nothing; your server re-verifies on-chain and your order record is the source of truth. Only dangerous if you fulfill from the client — don't (see README hardening). |
 | A flood of requests to the verify endpoint | your problem to rate-limit (see docs/DEPLOY.md); unknown/garbage are rejected before any node RPC. |
 | A proof from a seed-restored wallet for an old tx | works if the wallet still holds the tx key; restored wallets often don't (see docs/WALLETS.md). |
 

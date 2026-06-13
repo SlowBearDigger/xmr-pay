@@ -2700,6 +2700,10 @@ class XmrPay extends HTMLElement {
         var body = root.querySelector('.body');
         body.innerHTML = '<div class="ok"><div class="ring">✓</div><div class="t">' + t.paidTitle + '</div>' +
             '<div class="c">' + (out.confirmations != null ? out.confirmations + ' ' + t.confs : '') + '</div></div>';
+        // UX signal ONLY — this runs in the buyer's browser, so a buyer can fire
+        // this event (or fake this whole success state) from the console. NEVER
+        // release goods on it. Fulfill on YOUR server's verifyPayment + order
+        // record. (Same rule as Stripe: the client is not the authority.)
         this.dispatchEvent(new CustomEvent('xmr-pay:paid', { detail: out, bubbles: true, composed: true }));
         var redirect = this.getAttribute('redirect-url');
         if (redirect) setTimeout(function () { location.assign(redirect); }, 2500);

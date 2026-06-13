@@ -218,14 +218,17 @@ if (r.paid) {
 // receiver side: verifySignature(rawBody, secret, req.headers['x-xmr-pay-signature'])
 ```
 
-Retries with backoff built in. The browser side additionally gets the
-`xmr-pay:paid` DOM event for instant UX (redirect, unlock).
+Retries with backoff built in. The browser also gets an `xmr-pay:paid` DOM
+event — but treat it as **UX only** (a thank-you, a redirect), never as the
+signal to release goods. It runs in the buyer's browser, so a buyer can forge
+it in devtools; fulfillment is a server decision (see the threat model below).
 
 ## Threat model
 
 | Attack | Outcome |
 |---|---|
 | Buyer claims "I paid" with no proof | nothing to verify — rejected |
+| Buyer fakes "paid" in devtools — forge the `xmr-pay:paid` event, edit the DOM, or point `verify-url` at a fake server | cosmetic. Only their own screen is fooled; **your** server never verified a real payment, so the order stays unpaid. The browser decides nothing — fulfill server-side |
 | Forged / tampered proof | fails cryptographic verification on-chain |
 | Proof for a payment to someone else | proofs are address-bound — rejected |
 | Reusing a real proof on another order | amount-nonce + `alreadyUsed` — `replay`/`underpaid` |
@@ -237,6 +240,11 @@ Retries with backoff built in. The browser side additionally gets the
 
 ## Hardening checklist (the part that stays on you)
 
+- **Fulfill server-side, never from the browser.** The widget and its
+  `xmr-pay:paid` event are UX — a buyer can forge them in devtools or point the
+  widget at a fake server. Release goods only after **your** server's
+  `verifyPayment` / `verifyPaymentViaRpc` returned `paid` and you wrote it to
+  your order record. Same rule as Stripe: the client is never the authority.
 - **`UNIQUE` constraint on `tx_hash`** in your orders table — the `alreadyUsed`
   callback narrows the window; the constraint closes it.
 - **Use `makeAmountNonce` for every order** — it makes a proof structurally
