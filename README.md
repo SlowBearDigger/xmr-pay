@@ -167,6 +167,19 @@ Full endpoint with the anti-spam gates: [examples/serverless.js](examples/server
 Drop it in Vercel/Netlify/Express — it's stateless; your orders table is the
 only state and it's already yours.
 
+**No `monero-ts`?** If you already run `monero-wallet-rpc`, `verifyPaymentViaRpc`
+checks the same proofs through it — same gates, same result shape, **no WASM peer
+to install** (so none of `monero-ts`'s transitive advisories, see SECURITY.md):
+
+```js
+const { verifyPaymentViaRpc } = require('xmr-pay/watch');
+const r = await verifyPaymentViaRpc({
+  url: 'http://127.0.0.1:18083',     // your monero-wallet-rpc
+  txid, proof, address: order.address, amount: order.amount_xmr,
+  nodes: ['https://your-node:18081'], // for the time-lock gate if the wallet has no record of the tx
+});
+```
+
 ## 4b · Watch mode (optional auto-detection)
 
 Run `monero-wallet-rpc` with a **view-only** wallet on your own machine, then:

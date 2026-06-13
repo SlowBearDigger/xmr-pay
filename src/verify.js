@@ -68,6 +68,37 @@ function picoToXmr(p) {
     return Number(p) / 1e12;
 }
 
+// classify the proof material: a 64-hex tx secret key, or an (Out|In)Proof
+// signature. returns 'txkey' | 'txproof' | null. shared by both verify
+// transports so they accept exactly the same inputs.
+function detectProofKind(proof) {
+    if (typeof proof !== 'string') return null;
+    const p = proof.trim();
+    if (/^[0-9a-f]{64}$/i.test(p)) return 'txkey';
+    if (/^(Out|In)Proof[A-Za-z0-9]/.test(p)) return 'txproof';
+    return null;
+}
+
+// pure decision: map a verified proof/transfer result to a payment status.
+// does NOT gate unlock_time or replay — those are separate, stateful concerns.
+// shared by verifyPayment (monero-ts) and verifyPaymentViaRpc (wallet-rpc) so
+// the two transports can never drift on what counts as paid (the bug we found
+// in a downstream re-implementation: float amounts + a missing gate). amounts
+// in piconero (BigInt) — float never decides money.
+//   status: ok | invalid | no-funds | underpaid | mempool | unconfirmed
+function classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { expectedPico, tolerancePico = 0n, minConfirmations = 1 }) {
+    if (!isGood) return { status: 'invalid', reason: 'proof does not verify for this txid/address' };
+    if (receivedPico <= 0n) return { status: 'no-funds', reason: 'this transaction sent nothing to this address' };
+    if (receivedPico < expectedPico - tolerancePico) {
+        return { status: 'underpaid', reason: `received ${picoToXmr(receivedPico)} XMR, expected ${picoToXmr(expectedPico)}` };
+    }
+    if (confirmations < minConfirmations) {
+        return { status: inTxPool ? 'mempool' : 'unconfirmed', reason: `${confirmations}/${minConfirmations} confirmations` };
+    }
+    const overpaid = receivedPico > expectedPico;
+    return { status: 'ok', overpaid, overpaidXmr: overpaid ? picoToXmr(receivedPico - expectedPico) : 0 };
+}
+
 // one shared verifier wallet per (node, network) — random keys, no secrets.
 // cached so a warm serverless instance pays the WASM open cost once. entries
 // expire after WALLET_TTL_MS so a long-running server picks up node changes and
@@ -235,10 +266,8 @@ async function verifyPayment(opts) {
     try { expectedPico = xmrToPico(amount); } catch (e) { return fail('invalid', e.message); }
     if (expectedPico <= 0n) return fail('invalid', 'amount must be greater than 0');
 
-    let proofKind = null;
-    if (typeof proof === 'string' && /^[0-9a-f]{64}$/i.test(proof.trim())) proofKind = 'txkey';
-    else if (typeof proof === 'string' && /^(Out|In)Proof[A-Za-z0-9]/.test(proof.trim())) proofKind = 'txproof';
-    else return fail('invalid', 'proof must be a tx secret key (64 hex) or a tx proof signature (OutProofV*/InProofV*)');
+    const proofKind = detectProofKind(proof);
+    if (!proofKind) return fail('invalid', 'proof must be a tx secret key (64 hex) or a tx proof signature (OutProofV*/InProofV*)');
 
     // quorum 1: try nodes in order, first success wins (resilient, no cross-
     // check). quorum >= 2: query want+1 in parallel and require that EVERY node
@@ -277,18 +306,11 @@ async function verifyPayment(opts) {
     const receivedXmr = picoToXmr(head.receivedPico);
     const base = { receivedXmr, confirmations, txid: id, nodesAgreed: answers.length };
 
-    if (!head.isGood) return { paid: false, status: 'invalid', reason: 'proof does not verify for this txid/address', ...base };
-    if (head.receivedPico <= 0n) return { paid: false, status: 'no-funds', reason: 'this transaction sent nothing to this address', ...base };
-
     const tolerancePico = toleranceXmr ? xmrToPico(toleranceXmr) : 0n;
-    if (head.receivedPico < expectedPico - tolerancePico) {
-        return { paid: false, status: 'underpaid', reason: `received ${receivedXmr} XMR, expected ${amount}`, ...base };
-    }
-
-    if (confirmations < minConfirmations) {
-        const status = head.inTxPool ? 'mempool' : 'unconfirmed';
-        return { paid: false, status, reason: `${confirmations}/${minConfirmations} confirmations`, ...base };
-    }
+    const cls = classifyResult(
+        { isGood: head.isGood, receivedPico: head.receivedPico, confirmations, inTxPool: head.inTxPool },
+        { expectedPico, tolerancePico, minConfirmations });
+    if (cls.status !== 'ok') return { paid: false, status: cls.status, reason: cls.reason, ...base };
 
     // time-lock gate: amount and confirmations can both look right while the
     // outputs are frozen by unlock_time — that is not money the merchant can
@@ -310,13 +332,12 @@ async function verifyPayment(opts) {
     }
 
     // overpaid still counts as paid, but the merchant gets told so they can
-    // decide whether to refund the difference.
-    const overpaid = head.receivedPico > expectedPico;
+    // decide whether to refund the difference (cls computed it above).
     return {
         paid: true, status: 'paid', reason: 'verified on-chain',
-        overpaid, overpaidXmr: overpaid ? picoToXmr(head.receivedPico - expectedPico) : 0,
+        overpaid: cls.overpaid, overpaidXmr: cls.overpaidXmr,
         ...base,
     };
 }
 
-module.exports = { verifyPayment, fetchUnlockTime, xmrToPico, picoToXmr, isValidAddress, isValidTxid };
+module.exports = { verifyPayment, fetchUnlockTime, xmrToPico, picoToXmr, isValidAddress, isValidTxid, detectProofKind, classifyResult };
