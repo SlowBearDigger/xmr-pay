@@ -2,7 +2,7 @@
 // amount nonces, and QR rendering as a plain SVG string. pure functions, no
 // network, no state. pairs with ./verify on the merchant's server side.
 
-const qrcode = require('qrcode-generator');
+const qrcode = require('./vendor/qrcode-generator');   // vendored — zero npm deps
 const { isValidAddress, xmrToPico, picoToXmr, isValidTxid } = require('./verify'); // verify loads monero-ts lazily — safe for core-only users
 
 // piconero BigInt → canonical XMR decimal string (trailing zeros trimmed)

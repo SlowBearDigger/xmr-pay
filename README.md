@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/xmr-pay"><img src="https://img.shields.io/npm/v/xmr-pay?color=FF6600&label=npm" alt="npm version"></a>
   <img src="https://img.shields.io/badge/license-MIT-FF6600" alt="MIT license">
-  <img src="https://img.shields.io/badge/runtime%20deps-1-FF6600" alt="one runtime dependency">
+  <img src="https://img.shields.io/badge/runtime%20deps-0-FF6600" alt="zero runtime dependencies">
   <img src="https://img.shields.io/badge/releases-signed-FF6600" alt="signed releases">
 </p>
 
@@ -324,11 +324,11 @@ wallet.
 
 ## Build it yourself (reproducible)
 
-The widget is a plain concatenation of `widget/xmr-pay.part.js` and the pinned
-`qrcode-generator` — no minifier, no timestamps. Rebuild and compare:
+The widget is a plain concatenation of `widget/xmr-pay.part.js` and the vendored
+`qrcode-generator` (`src/vendor/`) — no minifier, no timestamps, no npm install
+needed. Rebuild and compare:
 
 ```
-npm ci
 npm run build
 shasum -a 256 widget/xmr-pay.js     # must match SHA256SUMS in the release
 ```

@@ -53,8 +53,11 @@ keys.
 
 ## Dependencies
 
-`xmr-pay` itself ships one runtime dependency (`qrcode-generator`) and no known
-CVEs. Payment links, QR, signed configs, and the widget need nothing else.
+`xmr-pay` itself ships **zero runtime npm dependencies** and no known CVEs. The
+one library it needs for QR rendering (`qrcode-generator`, MIT, no deps of its
+own) is vendored verbatim in `src/vendor/` — nothing is pulled from the registry
+at install time. Payment links, QR, signed configs, and the widget need nothing
+else.
 
 On-chain verification needs `monero-ts` — a large WASM library, declared as an
 **optional peer dependency**. You only install it for the server-side verify
