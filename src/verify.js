@@ -126,28 +126,53 @@ async function checkOnNode({ nodeUri, networkType, txid, proofKind, proof, addre
 
 // reject time-locked payments: a custom wallet can craft a tx whose outputs are
 // frozen via unlock_time — the proof verifies and confirmations accrue, but the
-// merchant cannot spend the funds (possibly for years). fetch the raw tx from
-// the daemon and require unlock_time === 0. fails CLOSED when no node returns
-// the tx — set skipUnlockTimeCheck only if you accept that risk.
-async function fetchUnlockTime(nodes, txid) {
-    for (const uri of nodes) {
-        try {
-            const r = await fetch(String(uri).replace(/\/+$/, '') + '/get_transactions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ txs_hashes: [txid], decode_as_json: true }),
-                signal: AbortSignal.timeout(10000),
-            });
-            if (!r.ok) continue;
-            const j = await r.json();
-            const tx = j && Array.isArray(j.txs) && j.txs[0];
-            if (!tx || !tx.as_json) continue;
-            const decoded = JSON.parse(tx.as_json);
-            if (decoded.unlock_time === undefined || decoded.unlock_time === null) continue;
-            return BigInt(String(decoded.unlock_time));
-        } catch { /* try next node */ }
+// merchant cannot spend the funds (possibly for years). read the raw tx from the
+// daemon and require unlock_time === 0.
+//
+// read ONE node's unlock_time for a txid; null if it could not be read. the
+// tx_hash in the daemon response is cross-checked against the requested txid, so
+// a node cannot answer with a different (unlocked) tx's blob.
+async function unlockTimeFromNode(uri, txid) {
+    try {
+        const r = await fetch(String(uri).replace(/\/+$/, '') + '/get_transactions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txs_hashes: [txid], decode_as_json: true }),
+            signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) return null;
+        const j = await r.json();
+        const tx = j && Array.isArray(j.txs) && j.txs[0];
+        if (!tx || !tx.as_json) return null;
+        if (tx.tx_hash && String(tx.tx_hash).toLowerCase() !== txid) return null;
+        const decoded = JSON.parse(tx.as_json);
+        if (decoded.unlock_time === undefined || decoded.unlock_time === null) return null;
+        return BigInt(String(decoded.unlock_time));
+    } catch { return null; }
+}
+
+// the time-lock gate must honor the SAME node-quorum as the proof step — else a
+// single lying node could report unlock_time=0 for a frozen tx and flip
+// locked -> paid even under quorum >= 2. quorum 1: first node that answers wins
+// (the merchant opted into single-node trust). quorum >= 2: read want+1 nodes in
+// parallel and require at least `want` to answer AND all answers to agree; one
+// disagreeing node trips it, exactly like checkOnNode. returns the agreed
+// unlock_time, or null when it cannot be established — fail CLOSED, the caller
+// does not mark paid. set skipUnlockTimeCheck only if you accept that risk.
+async function fetchUnlockTime(nodes, txid, quorum = 1) {
+    const id = String(txid).toLowerCase();
+    const want = Math.max(1, quorum | 0);
+    if (want === 1) {
+        for (const uri of nodes) {
+            const t = await unlockTimeFromNode(uri, id);
+            if (t !== null) return t;
+        }
+        return null;
     }
-    return null;
+    const targets = nodes.slice(0, Math.min(nodes.length, want + 1));
+    const answered = (await Promise.all(targets.map(uri => unlockTimeFromNode(uri, id)))).filter(t => t !== null);
+    if (answered.length < want) return null;                              // not enough nodes vouched — fail closed
+    return answered.every(t => t === answered[0]) ? answered[0] : null;   // any disagreement — fail closed
 }
 
 /**
@@ -269,9 +294,9 @@ async function verifyPayment(opts) {
     // outputs are frozen by unlock_time — that is not money the merchant can
     // spend, so it does not count as paid.
     if (!skipUnlockTimeCheck) {
-        const unlockTime = await fetchUnlockTime(nodes, id);
+        const unlockTime = await fetchUnlockTime(nodes, id, want);
         if (unlockTime === null) {
-            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — every node failed to return the tx; not marking paid (add nodes or retry)', ...base };
+            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — nodes did not return the tx or disagreed; not marking paid (add nodes or retry)', ...base };
         }
         if (unlockTime !== 0n) {
             return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable, not accepted`, ...base };
