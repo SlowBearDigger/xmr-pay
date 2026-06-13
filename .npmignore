@@ -4,3 +4,6 @@ examples/demo-info.json
 SHA256SUMS
 SHA256SUMS.minisig
 SHA256SUMS.asc
+# audit / scratch docs — local only, never published (contain local paths)
+docs/PENTEST-REPORT.md
+docs/code-issues.md
