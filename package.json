@@ -40,9 +40,7 @@
     "serverless",
     "widget"
   ],
-  "dependencies": {
-    "qrcode-generator": "^1.4.4"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "monero-ts": ">=0.11.0"
   },

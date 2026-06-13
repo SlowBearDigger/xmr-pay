@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# reassemble widget/xmr-pay.js from source + the pinned qrcode-generator.
+# reassemble widget/xmr-pay.js from source + the vendored qrcode-generator.
 # deterministic: no timestamps, no minifier, plain concatenation. anyone who
-# runs `npm ci && npm run build` gets a byte-identical file, so the published
-# SHA256SUMS can be reproduced rather than trusted.
+# runs `npm run build` gets a byte-identical file, so the published SHA256SUMS
+# can be reproduced rather than trusted. qrcode-generator is vendored in-repo
+# (src/vendor) so the build needs no npm dependency at all.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-QR="${QRCODE_SRC:-node_modules/qrcode-generator/qrcode.js}"
-[ -f "$QR" ] || { echo "missing $QR — run 'npm ci' first"; exit 1; }
-VER="$(node -p "require('qrcode-generator/package.json').version" 2>/dev/null || echo vendored)"
+QR="${QRCODE_SRC:-src/vendor/qrcode-generator.js}"   # vendored in-repo — zero npm deps, always present
+[ -f "$QR" ] || { echo "missing $QR"; exit 1; }
+VER="1.5.2"   # vendored qrcode-generator version (src/vendor) — bump when the vendored file is updated
 
 OUT=widget/xmr-pay.js
 {

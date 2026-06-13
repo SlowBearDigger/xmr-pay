@@ -1,5 +1,5 @@
 // client-side primitives: amount nonces, payment URIs, QR. offline, no network.
-//   node test/core.test.js   (needs qrcode-generator installed: npm i)
+//   node test/core.test.js   (zero deps — qrcode-generator is vendored)
 
 const core = require('../src/core');
 const { xmrToPico } = require('../src/verify');
