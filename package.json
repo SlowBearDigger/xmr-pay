@@ -18,7 +18,9 @@
     "examples",
     "README.md",
     "LICENSE",
-    "docs"
+    "docs/DEPLOY.md",
+    "docs/WALLETS.md",
+    "docs/SUITE.md"
   ],
   "license": "MIT",
   "author": "SlowBearDigger",
