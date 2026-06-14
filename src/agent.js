@@ -42,7 +42,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
     async function check(id, { sync = true } = {}) {
         const order = orders.get(id);
         if (!order) return null;
-        const r = await scanner.checkOrder({ subaddressIndex: order.index, amount: order.amount, minConfirmations, sync });
+        const r = await scanner.checkOrder({ subaddressIndex: order.index, amount: order.amount, minConfirmations, minHeight: order.birthdayHeight, sync });
         const wasPaid = order.paid;
         order.status = r.status;
         order.paid = r.paid;
