@@ -2318,12 +2318,17 @@ var XP_STR = {
         verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard — paste manually',
         paidTitle: 'Payment confirmed', confs: 'confirmations',
         underpaid: 'Received {r} XMR, expected {e}',
+        topupMsg: 'Detected {r} XMR — send {s} more to complete',
+        topupTitle: 'Scan to send the difference',
         mempool: 'Seen in the mempool — waiting for the first block',
         unconfirmed: 'Not confirmed yet — try again in a minute',
         replay: 'This transaction already paid another order',
-        invalid: 'Could not verify — check the txid and proof',
+        invalid: 'We couldn’t match this to your payment — check the transaction ID and proof are for THIS order',
+        badTxid: 'That transaction ID looks off — it should be 64 characters. Copy the whole thing from your wallet',
+        badProof: 'That doesn’t look like a payment proof — paste the tx key (64 chars) or the proof block (OutProof…/InProof…) from your wallet',
         'no-funds': 'This transaction sent nothing to this address',
         'node-disagreement': 'Nodes disagreed — try again',
+        'node-error': 'Nodes are unavailable — try again in a moment',
         locked: 'Funds are time-locked — payment not accepted',
         netErr: 'Network error — try again',
         foot: 'Non-custodial — funds go directly to the merchant.',
@@ -2345,12 +2350,17 @@ var XP_STR = {
         verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles — pega a mano',
         paidTitle: 'Pago confirmado', confs: 'confirmaciones',
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
+        topupMsg: 'Detectado {r} XMR — envía {s} más para completar',
+        topupTitle: 'Escanea para enviar la diferencia',
         mempool: 'Visto en el mempool — esperando el primer bloque',
         unconfirmed: 'Aún sin confirmar — prueba en un minuto',
         replay: 'Esta transacción ya pagó otra orden',
-        invalid: 'No se pudo verificar — revisa el txid y la prueba',
+        invalid: 'No pudimos relacionarlo con tu pago — revisa que el ID de transacción y la prueba sean de ESTA orden',
+        badTxid: 'Ese ID de transacción no cuadra — debe tener 64 caracteres. Copia el completo desde tu wallet',
+        badProof: 'Eso no parece una prueba de pago — pega la tx key (64 caracteres) o el bloque (OutProof…/InProof…) de tu wallet',
         'no-funds': 'Esta transacción no envió nada a esta dirección',
         'node-disagreement': 'Los nodos no coinciden — reintenta',
+        'node-error': 'Nodos no disponibles — reintenta en un momento',
         locked: 'Los fondos están bloqueados en el tiempo — pago no aceptado',
         netErr: 'Error de red — reintenta',
         foot: 'No-custodial — los fondos van directo al comerciante.',
@@ -2411,6 +2421,11 @@ var XP_CSS = [
     ':host *:focus-visible{outline:2px solid var(--xp-accent);outline-offset:2px;}',
     ':host([skin=brutal]) .wallet,:host([skin=brutal]) .go{border-color:var(--xp-border);}',
     '.res{margin-top:7px;font-size:10px;font-weight:700;} .res.bad{color:var(--xp-red);} .res.mid{color:var(--xp-yellow);}',
+    '.topup{margin-top:9px;padding:11px;border:1px solid var(--xp-input);border-radius:var(--xp-radius-sm);text-align:center;}',
+    '.topup .ta{font-family:var(--xp-mono);font-size:14px;font-weight:800;color:var(--xp-accent);letter-spacing:var(--xp-track);margin-top:2px;}',
+    '.topup .tq{width:150px;height:150px;background:#fff;padding:7px;margin:8px auto;border:var(--xp-bw-in) solid var(--xp-qr-border);border-radius:var(--xp-radius-sm);}',
+    '.topup .tq svg{display:block;width:100%;height:100%;}',
+    '.topup .wallet{margin-top:4px;}',
     '.hint{margin-top:7px;font-size:9px;color:var(--xp-muted);line-height:1.5;}',
     '.foot{padding:10px 16px;border-top:1px solid var(--xp-input);font-size:9px;color:var(--xp-muted);text-align:center;}',
     '.ok{padding:26px 16px;text-align:center;}',
@@ -2439,6 +2454,18 @@ function xpEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
     });
+}
+
+// canonical XMR decimal for the monero: URI's tx_amount — trims trailing zeros
+// and surrounding space so every wallet (Feather, GUI, CLI, Cake, Monerujo,
+// Stack…) prefills the same clean amount. matches src/core.js picoToXmrString,
+// the form round-trip-tested against the official wallet2 parser. odd inputs are
+// left untouched (the amount is validated server-side regardless).
+function xpNormAmount(a) {
+    a = String(a == null ? '' : a).trim();
+    if (!/^\d+(\.\d{1,12})?$/.test(a)) return a;
+    if (a.indexOf('.') < 0) return a;
+    return a.replace(/0+$/, '').replace(/\.$/, '');
 }
 
 // signed-config verification, browser side. mirrors src/config.js exactly so a
@@ -2514,7 +2541,7 @@ class XmrPay extends HTMLElement {
     _uri() {
         var label = this.getAttribute('label');
         var p = [];
-        if (this._amount) p.push('tx_amount=' + encodeURIComponent(this._amount));
+        if (this._amount) p.push('tx_amount=' + encodeURIComponent(xpNormAmount(this._amount)));
         if (label) p.push('tx_description=' + encodeURIComponent(label));
         return 'monero:' + (this._addr || '') + (p.length ? '?' + p.join('&') : '');
     }
@@ -2582,6 +2609,7 @@ class XmrPay extends HTMLElement {
                 '<button class="go verify" type="button">' + t.verifyBtn + '</button>' +
                 '</div>' +
                 '<p class="res hidden" role="status" aria-live="polite"></p>' +
+                '<div class="topup hidden" role="status" aria-live="polite"></div>' +
                 '<p class="hint">' + t.proofHint + '</p>' +
                 '</div>'
                 : '') +
@@ -2665,6 +2693,10 @@ class XmrPay extends HTMLElement {
         var btn = root.querySelector('.verify');
         if (!txid) { root.querySelector('.txid').focus(); return; }
         if (!proof) { root.querySelector('.proof').focus(); return; }
+        // catch the common paste mistakes BEFORE a server round-trip, with a
+        // specific message so the buyer can fix it on the spot.
+        if (!/^[0-9a-f]{64}$/i.test(txid)) { this._showRes(root, t.badTxid, 'bad'); root.querySelector('.txid').focus(); return; }
+        if (!(/^[0-9a-f]{64}$/i.test(proof) || /^(Out|In)Proof/i.test(proof))) { this._showRes(root, t.badProof, 'bad'); root.querySelector('.proof').focus(); return; }
 
         btn.disabled = true; btn.textContent = t.verifying;
         res.classList.add('hidden');
@@ -2687,11 +2719,33 @@ class XmrPay extends HTMLElement {
 
         var status = (out && (out.status || out.error)) || 'invalid';
         var msg = t[status] || (out && out.error) || t.invalid;
+        var topup = root.querySelector('.topup');
+        if (topup) { topup.className = 'topup hidden'; topup.innerHTML = ''; }
         if (status === 'underpaid') {
-            msg = t.underpaid.replace('{r}', out.receivedXmr != null ? out.receivedXmr : '?').replace('{e}', '—');
+            var recv = out.receivedXmr != null ? out.receivedXmr : '?';
+            if (out.shortfallXmr != null) {
+                // the server computed the missing amount in piconero (exact). show
+                // it AND a QR for EXACTLY the difference so the buyer can top up —
+                // no mental math, no chance to send the wrong amount.
+                msg = t.topupMsg.replace('{r}', recv).replace('{s}', out.shortfallXmr);
+                if (topup) {
+                    var tUri = 'monero:' + (this._addr || '') + '?tx_amount=' + encodeURIComponent(out.shortfallXmr);
+                    var tLbl = this.getAttribute('label'); if (tLbl) tUri += '&tx_description=' + encodeURIComponent(tLbl);
+                    topup.innerHTML =
+                        '<div class="lbl">' + t.topupTitle + '</div>' +
+                        '<div class="ta">' + xpEsc(out.shortfallXmr) + ' XMR</div>' +
+                        '<div class="tq">' + xpQrSvg(tUri) + '</div>' +
+                        '<a class="wallet" href="' + xpEsc(tUri) + '">' + t.openWallet + '</a>';
+                    topup.className = 'topup';
+                }
+            } else {
+                // older server without shortfallXmr — fall back to expected amount.
+                var exp = out.expectedXmr != null ? out.expectedXmr : (this.getAttribute('amount') || '—');
+                msg = t.underpaid.replace('{r}', recv).replace('{e}', exp);
+            }
         }
         res.textContent = msg;
-        res.className = 'res ' + (status === 'mempool' || status === 'unconfirmed' ? 'mid' : 'bad');
+        res.className = 'res ' + (status === 'mempool' || status === 'unconfirmed' || status === 'node-error' ? 'mid' : 'bad');
     }
 
     _success(root, out, t) {

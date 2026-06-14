@@ -77,5 +77,9 @@ module.exports = async function handler(req, res) {
             }, { secret: process.env.FULFILL_WEBHOOK_SECRET });
         }
     }
-    return res.json(result);
+    // transient transport failures (node-error, node-disagreement) are retryable:
+    // answer 503 so clients and infra back off and retry, while still returning the
+    // result body. terminal verdicts (paid/underpaid/locked/invalid/…) are 200.
+    const retryable = result.status === 'node-error' || result.status === 'node-disagreement';
+    return res.status(retryable ? 503 : 200).json(result);
 };
