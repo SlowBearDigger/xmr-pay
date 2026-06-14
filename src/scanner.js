@@ -54,7 +54,22 @@ function toRow(t) {
     const locked = ut != null && String(ut) !== '' && String(ut) !== '0';
     const txid = call(tx, 'getHash', 'hash') || call(t, 'getTxHash', 'txHash') || null;
     const amountPico = big(call(t, 'getAmount', 'amount') ?? 0n);
-    return { txid, amountPico, confirmations, inPool, locked };
+    // the block this transfer landed in (0 / falsy while still in the mempool).
+    // used to bind a payment to the order that was live when it arrived.
+    const height = Number(call(tx, 'getHeight', 'height') ?? 0) || 0;
+    return { txid, amountPico, confirmations, inPool, locked, height };
+}
+
+// an order can only ever be paid by money that arrives AFTER the order exists.
+// drop CONFIRMED transfers below the order's birthday height (minus a small
+// reorg/timing grace) so a REUSED or pre-funded subaddress can't settle a new
+// order with a stale payment — the false-instant-paid bug. in-pool / unheighted
+// rows (height 0) are recent by definition, so they're always kept.
+const BIRTHDAY_GRACE = 3;
+function creditableRows(rows, minHeight, grace = BIRTHDAY_GRACE) {
+    if (minHeight == null) return rows;
+    const floor = minHeight - grace;
+    return rows.filter(r => !r.height || r.height >= floor);
 }
 
 async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0 } = {}) {
@@ -115,12 +130,14 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
             return { address: call(sub, 'getAddress', 'address'), index: Number(call(sub, 'getIndex', 'index')), atHeight };
         },
         async addressAt(index) { return await wallet.getAddress(accountIndex, index); },
-        async checkOrder({ subaddressIndex, amount, minConfirmations = 1, sync = true }) {
+        async checkOrder({ subaddressIndex, amount, minConfirmations = 1, minHeight = null, sync = true }) {
             if (sync) await doSync();
             // materialize the index so a fresh order's subaddress is actually scanned
             try { await wallet.getAddress(accountIndex, subaddressIndex); } catch { /* lookahead covers it */ }
             const transfers = await wallet.getTransfers({ accountIndex, subaddressIndex, isIncoming: true });
-            return summarizeTransfers(transfers.map(toRow), xmrToPico(amount), minConfirmations);
+            // only credit payments that arrived at/after the order's birthday
+            const rows = creditableRows(transfers.map(toRow), minHeight);
+            return summarizeTransfers(rows, xmrToPico(amount), minConfirmations);
         },
         async sync() { await doSync(); },
         async height() { return Number(await wallet.getHeight()); },
@@ -130,4 +147,4 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     };
 }
 
-module.exports = { createScanner, toRow };
+module.exports = { createScanner, toRow, creditableRows };

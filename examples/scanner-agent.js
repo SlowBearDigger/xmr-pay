@@ -64,13 +64,33 @@ function send(res, code, body) {
             if (env.FULFILL_WEBHOOK_URL) {
                 try {
                     await sendWebhook(env.FULFILL_WEBHOOK_URL,
-                        { event: 'order.paid', order_id: order.id, amount_xmr: order.amount, txids: order.txids, confirmations: order.confirmations },
+                        {
+                            event: 'order.paid',
+                            order_id: order.id,
+                            amount_xmr: order.amount,           // what was owed
+                            received_xmr: order.receivedXmr,    // what actually landed (≥ owed)
+                            address: order.address,             // the per-order subaddress paid
+                            txids: order.txids,
+                            confirmations: order.confirmations,
+                            network: env.XMR_NETWORK || 'mainnet',
+                        },
                         { secret: env.FULFILL_WEBHOOK_SECRET });
                 } catch (e) { console.error(`[webhook] ${order.id} failed: ${e.message}`); }
             }
         },
     });
     agent.start();
+
+    const MIN_CONF = intEnv('XMR_MIN_CONFIRMATIONS', 1);
+    // cached chain tip so a busy status endpoint doesn't hammer the node — gives
+    // the UI a REAL, live block height to show ("scanning the blockchain").
+    let _tip = { h: 0, at: 0 };
+    async function tipHeight() {
+        const now = Date.now();
+        if (_tip.h && now - _tip.at < 5000) return _tip.h;
+        try { _tip.h = await scanner.daemonHeight(); _tip.at = now; } catch { /* keep last */ }
+        return _tip.h || null;
+    }
 
     const server = http.createServer(async (req, res) => {
         const url = req.url.split('?')[0];
@@ -96,7 +116,7 @@ function send(res, code, body) {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
                 const r = await agent.check(decodeURIComponent(m[1]));
                 if (!r) return send(res, 404, { error: 'unknown order' });
-                return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, confirmations: r.confirmations, txids: r.txids });
+                return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: await tipHeight(), txids: r.txids });
             }
             send(res, 404, { error: 'not found' });
         } catch (e) { send(res, 500, { error: 'agent error' }); }

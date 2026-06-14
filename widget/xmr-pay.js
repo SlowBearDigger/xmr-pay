@@ -2322,6 +2322,7 @@ var XP_STR = {
         topupTitle: 'Scan to send the difference',
         mempool: 'Seen in the mempool — waiting for the first block',
         unconfirmed: 'Not confirmed yet — try again in a minute',
+        confirming: 'Confirming — {c} confirmation(s)…',
         replay: 'This transaction already paid another order',
         invalid: 'We couldn’t match this to your payment — check the transaction ID and proof are for THIS order',
         badTxid: 'That transaction ID looks off — it should be 64 characters. Copy the whole thing from your wallet',
@@ -2354,6 +2355,7 @@ var XP_STR = {
         topupTitle: 'Escanea para enviar la diferencia',
         mempool: 'Visto en el mempool — esperando el primer bloque',
         unconfirmed: 'Aún sin confirmar — prueba en un minuto',
+        confirming: 'Confirmando — {c} confirmación(es)…',
         replay: 'Esta transacción ya pagó otra orden',
         invalid: 'No pudimos relacionarlo con tu pago — revisa que el ID de transacción y la prueba sean de ESTA orden',
         badTxid: 'Ese ID de transacción no cuadra — debe tener 64 caracteres. Copia el completo desde tu wallet',
@@ -2756,11 +2758,23 @@ class XmrPay extends HTMLElement {
                 msg = t.underpaid.replace('{r}', recv).replace('{e}', exp);
             }
         }
+        // proof mode LIVE progress: a mempool/unconfirmed payment WILL confirm —
+        // show the real confirmation count and re-check on a timer until it's paid,
+        // so the buyer watches it climb instead of being told to "try again later".
+        if (status === 'unconfirmed' && out && out.confirmations != null) {
+            msg = t.confirming.replace('{c}', out.confirmations);
+        }
         res.textContent = msg;
         res.className = 'res ' + (status === 'mempool' || status === 'unconfirmed' || status === 'node-error' ? 'mid' : 'bad');
+        clearTimeout(this._repollT);
+        if (status === 'mempool' || status === 'unconfirmed') {
+            var self = this;
+            this._repollT = setTimeout(function () { self._verify(root, verifyUrl, t); }, 15000);
+        }
     }
 
     _success(root, out, t) {
+        clearTimeout(this._repollT);
         var st = root.querySelector('.st');
         if (st) { st.textContent = '✓ ' + t.paidTitle; st.classList.add('paid'); }
         var body = root.querySelector('.body');
