@@ -18,7 +18,12 @@ function verifySignature(body, secret, header) {
 }
 
 async function sendWebhook(url, payload, { secret = null, attempts = 3, timeoutMs = 8000 } = {}) {
-    const body = JSON.stringify(payload);
+    // stamp the event time INSIDE the signed body, so a receiver can reject a
+    // replayed delivery (check `event_ts` is recent after verifying the signature).
+    // it can't be forged without the secret. defense in depth — the real guard is
+    // idempotency on order_id. caller-supplied event_ts is preserved.
+    const stamped = (payload && payload.event_ts != null) ? payload : { ...payload, event_ts: Date.now() };
+    const body = JSON.stringify(stamped);
     const headers = { 'Content-Type': 'application/json' };
     if (secret) headers['X-XMR-Pay-Signature'] = signPayload(body, secret);
     let last = { delivered: false };

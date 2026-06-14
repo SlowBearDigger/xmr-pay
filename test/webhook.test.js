@@ -34,6 +34,12 @@ const server = http.createServer((req, res) => {
     ok('receiver rejects with the wrong secret', !verifySignature(seen.body, 'whsec_wrong', seen.sig));
     ok('receiver rejects a tampered body', !verifySignature(seen.body.replace('ord_1', 'ord_2'), 'whsec_test', seen.sig));
     ok('signPayload is deterministic', signPayload('{"a":1}', 's') === signPayload('{"a":1}', 's'));
+    // event_ts is stamped inside the signed body (replay-defense): present, recent,
+    // and covered by the signature (a stale/forged ts can't pass verifySignature).
+    const ts = seen && JSON.parse(seen.body).event_ts;
+    ok('event_ts stamped, recent, and signed', typeof ts === 'number' && Date.now() - ts < 60000);
+    const caller = await sendWebhook(url, { event: 'x', event_ts: 123 }, { secret: 'whsec_test', attempts: 1 });
+    ok('caller-supplied event_ts is preserved', JSON.parse(seen.body).event_ts === 123);
 
     // unreachable target reports failure instead of throwing
     const dead = await sendWebhook('http://127.0.0.1:1/hook', payload, { attempts: 1, timeoutMs: 1500 });

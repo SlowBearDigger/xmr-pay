@@ -271,8 +271,11 @@ if (r.paid) {
 ```
 
 Retries with backoff built in. (The agent fires this for you, once, on settle.)
-The browser also gets an `xmr-pay:paid` DOM event — treat it as **UX only** (a
-thank-you, a redirect), never the signal to release goods.
+The signed body carries an `event_ts` (unix ms) — after verifying the signature,
+reject a delivery whose `event_ts` is stale, and stay idempotent on `order_id`, so
+a replayed webhook can't trigger a second fulfillment. The browser also gets an
+`xmr-pay:paid` DOM event — treat it as **UX only** (a thank-you, a redirect),
+never the signal to release goods.
 
 ## Security and trust
 
