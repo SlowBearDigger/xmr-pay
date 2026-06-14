@@ -1,0 +1,33 @@
+name: tests
+
+# runs the OFFLINE suite (159 checks + a 92k-case math fuzz) on every push/PR.
+# the live stagenet tests are intentionally NOT here — they need monero-ts, a
+# reachable node, and a funded view-only wallet, none of which belong in CI.
+# the offline suite needs no network and no monero-ts (it's a lazy, optional
+# peer that the offline paths never invoke).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # zero runtime deps + vendored QR encoder; this just validates the lockfile
+      - run: npm ci --omit=optional || npm install --omit=optional --no-audit --no-fund
+      - run: npm test
+      # the widget must be reproducible from source — rebuild and diff
+      - run: npm run build && git diff --exit-code widget/xmr-pay.js

@@ -187,11 +187,19 @@ proof endpoint as a dispute path.
   orders (id → subaddress index + amount) in your own DB and re-register them on
   restart (`createOrder({ id, amount, index })` binds an existing subaddress); the
   wallet itself persists with `XMR_WALLET_PATH` so scanning resumes fast.
-- **Maturation.** A freshly confirmed payment is locked ~10 blocks (standard
-  Monero output lock). The agent shows it as `locked` with `shortfallXmr: "0"`
-  (the buyer owes nothing more) and flips to `paid` once it's spendable.
-- **Reorgs.** Scale `XMR_MIN_CONFIRMATIONS` with order value; the agent re-checks
-  live, so a dropped block un-settles on the next poll.
+- **Maturation vs. time-locks.** Every confirmed output is briefly unspendable
+  during Monero's ~10-block maturation — that's benign, so a confirmed payment
+  counts toward `paid` at `XMR_MIN_CONFIRMATIONS`, the same as proof mode and the
+  wallet-rpc watcher. Only an **explicit** `unlock_time` (the time-lock scam)
+  holds an order at `locked` (with `shortfallXmr: "0"` — the buyer owes nothing).
+- **Reorgs are final once fulfilled.** When `onPaid` fires, the poller treats the
+  order as settled and stops re-checking it — a later reorg will **not** un-settle
+  it on its own. So don't ship high-value orders at 1 conf: scale
+  `XMR_MIN_CONFIRMATIONS` with value (e.g. 10), and re-`check()` manually before an
+  expensive fulfillment if you want to confirm the tx is still buried.
+- **Run ONE agent per view key.** `onPaid` is exactly-once *per process*. For high
+  availability, run a single instance — or make your webhook receiver idempotent
+  on `order_id` (and/or use shared state) so two instances can never double-fulfill.
 
 ---
 
