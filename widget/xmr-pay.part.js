@@ -215,8 +215,20 @@ class XmrPay extends HTMLElement {
         try {
             var env = JSON.parse(atob(cfg));
             var v = await xpVerifyConfig(env);
-            var pin = (this.getAttribute('pubkey') || this.getAttribute('fingerprint') || '').trim();
-            var pinned = !pin || (v.fingerprint && pin.replace(/[^a-f0-9]/gi, '').toLowerCase() === v.fingerprint.replace(/-/g, ''));
+            // pinning: a `pubkey` is the signer's FULL key — compare its DER bytes
+            // (formatting-agnostic), not as if it were a fingerprint. a `fingerprint`
+            // is the short hex id. either one, when set, must match the signer.
+            var pinnedPub = (this.getAttribute('pubkey') || '').trim();
+            var pinnedFp = (this.getAttribute('fingerprint') || '').trim();
+            var pinned = true;
+            if (pinnedPub) {
+                try {
+                    var a = xpPemToDer(pinnedPub), b = xpPemToDer(env.pubkey);
+                    pinned = a.length === b.length && a.every(function (x, i) { return x === b[i]; });
+                } catch (e) { pinned = false; }
+            } else if (pinnedFp) {
+                pinned = !!v.fingerprint && pinnedFp.replace(/[^a-f0-9]/gi, '').toLowerCase() === v.fingerprint.replace(/-/g, '');
+            }
             if (v.valid && pinned) {
                 this._addr = (env.config.address || '').trim();
                 this._amount = (env.config.amount != null ? String(env.config.amount) : '').trim();

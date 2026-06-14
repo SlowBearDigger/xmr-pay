@@ -57,7 +57,7 @@
   "scripts": {
     "build": "bash scripts/build-widget.sh",
     "release": "bash scripts/release.sh",
-    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js",
+    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/config-pin.test.js",
     "test:live": "node test/live-stagenet.js",
     "test:scanner": "node test/live-scanner.js",
     "test:fastsync": "node test/scanner-fastsync.js",
