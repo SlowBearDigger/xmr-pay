@@ -72,6 +72,9 @@ subaddress; when the confirmed, spendable total covers the amount, the order is
 ## Quickstart
 
 Needs Node and `monero-ts` (the only non-core dependency — `npm i monero-ts`).
+`monero-ts` pins two old transitive deps with advisories; patch them with npm
+`overrides` in your deployment's `package.json` (recipe in
+[SECURITY.md](../SECURITY.md#dependencies) — `npm audit` then reports zero).
 
 ```bash
 XMR_PRIMARY_ADDRESS="4your_primary_address…" \

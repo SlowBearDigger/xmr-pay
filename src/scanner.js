@@ -62,6 +62,9 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     if (!Array.isArray(nodes) || nodes.length === 0) throw new Error('at least one node URI is required');
     const m = lazyMonero();
 
+    // `fs` is required lazily and ONLY when a wallet `path` is given — deliberate,
+    // not a style slip: an in-memory scanner (no path, e.g. a browser/edge Modo A
+    // bundle) must not pull `fs` into its dependency graph at all.
     const opening = !!(path && require('fs').existsSync(path + '.keys'));
 
     // a FRESH scanner starts at the chain tip unless an explicit restoreHeight is
