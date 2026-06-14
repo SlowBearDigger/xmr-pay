@@ -18,6 +18,13 @@ const TRANSFERS = {
     4: { in: [], pool: [{ txid: 'e'.repeat(64), amount: 100000000000, confirmations: 0, type: 'pool', unlock_time: 0, locked: false }] },
     5: { in: [{ txid: 'f'.repeat(64), amount: 100000000000, confirmations: 20, type: 'in', unlock_time: 3000000, locked: true }], pool: [] },
     6: { in: [], pool: [] },
+    // 7: one partial payment toward a 0.100000004821 nonce order (→ exact shortfall)
+    7: { in: [{ txid: '7'.repeat(64), amount: 50000004821, confirmations: 3, type: 'in', unlock_time: 0, locked: false }], pool: [] },
+    // 8: TWO payments that sum to an exact nonce amount (the "second payment" case)
+    8: { in: [
+        { txid: '8'.repeat(64), amount: 50000000000, confirmations: 3, type: 'in', unlock_time: 0, locked: false },
+        { txid: '9'.repeat(64), amount: 50000004821, confirmations: 3, type: 'in', unlock_time: 0, locked: false },
+    ], pool: [] },
 };
 
 const server = http.createServer((req, res) => {
@@ -50,6 +57,20 @@ const server = http.createServer((req, res) => {
     r = await w.checkOrder({ subaddressIndex: 3, amount: '0.1' });
     ok('two transfers sum to paid (installments work)', r.paid && r.receivedXmr === 0.1 && r.txids.length === 2);
 
+    // the buyer-facing "send X more" in watch mode — exact, and the SECOND payment
+    // is detected simply by summing transfers to the order's subaddress.
+    r = await w.checkOrder({ subaddressIndex: 2, amount: '0.1' });
+    ok('partial → exact shortfall (send 0.06 more)', !r.paid && r.shortfallXmr === '0.06', r.shortfallXmr);
+
+    r = await w.checkOrder({ subaddressIndex: 3, amount: '0.1' });
+    ok('second payment detected + summed → paid, shortfall 0', r.paid && r.shortfallXmr === '0', r.shortfallXmr);
+
+    r = await w.checkOrder({ subaddressIndex: 7, amount: '0.100000004821' });
+    ok('partial toward a NONCE order → exact shortfall 0.05', !r.paid && r.status === 'partial' && r.shortfallXmr === '0.05', r.shortfallXmr);
+
+    r = await w.checkOrder({ subaddressIndex: 8, amount: '0.100000004821' });
+    ok('two payments sum to an EXACT nonce amount → paid', r.paid && r.shortfallXmr === '0', `rec=${r.receivedXmr}`);
+
     r = await w.checkOrder({ subaddressIndex: 3, amount: '0.1', minConfirmations: 3 });
     ok('minConfirmations counts per transfer (2-conf half not counted yet)', !r.paid && r.status === 'mempool', r.reason);
 
@@ -58,6 +79,9 @@ const server = http.createServer((req, res) => {
 
     r = await w.checkOrder({ subaddressIndex: 5, amount: '0.1' });
     ok('time-locked outputs never count as paid', !r.paid && r.status === 'locked', r.reason);
+    // but locked funds ARE on-chain, so the buyer owes nothing more — shortfall 0,
+    // not the locked amount (else a top-up prompt would tell them to overpay).
+    ok('locked funds count toward shortfall → owes 0, just waits', r.shortfallXmr === '0' && r.lockedXmr === 0.1, `short ${r.shortfallXmr} locked ${r.lockedXmr}`);
 
     r = await w.checkOrder({ subaddressIndex: 6, amount: '0.1' });
     ok('nothing yet → pending', !r.paid && r.status === 'pending');

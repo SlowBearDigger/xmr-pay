@@ -3,15 +3,7 @@
 // network, no state. pairs with ./verify on the merchant's server side.
 
 const qrcode = require('./vendor/qrcode-generator');   // vendored — zero npm deps
-const { isValidAddress, xmrToPico, picoToXmr, isValidTxid } = require('./verify'); // verify loads monero-ts lazily — safe for core-only users
-
-// piconero BigInt → canonical XMR decimal string (trailing zeros trimmed)
-function picoToXmrString(pico) {
-    const s = pico.toString().padStart(13, '0');
-    const i = s.slice(0, -12);
-    const f = s.slice(-12).replace(/0+$/, '');
-    return f ? `${i}.${f}` : i;
-}
+const { isValidAddress, xmrToPico, picoToXmr, picoToXmrString, isValidTxid } = require('./verify'); // verify loads monero-ts lazily — safe for core-only users
 
 // unique per-order amount: base + random 1..(10^digits - 1) piconero. the
 // on-chain amount helps a payment proof structurally fit only its own order.

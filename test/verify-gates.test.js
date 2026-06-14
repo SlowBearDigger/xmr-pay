@@ -4,7 +4,7 @@
 // against regressions in the cheap rejections.
 //   node test/verify-gates.test.js
 
-const { verifyPayment, xmrToPico, fetchUnlockTime } = require('../src/verify');
+const { verifyPayment, xmrToPico, fetchUnlockTime, isTransientError, classifyResult, picoToXmrString } = require('../src/verify');
 
 const OK_TXID = 'a'.repeat(64);
 const OK_KEY = 'b'.repeat(64);
@@ -23,6 +23,28 @@ ok('xmrToPico zero', xmrToPico(0) === 0n && xmrToPico('0') === 0n);
 try { xmrToPico('0.0000000000001'); ok('xmrToPico rejects 13 decimals', false); }
 catch { ok('xmrToPico rejects 13-decimal string', true); }
 try { xmrToPico('-1'); ok('xmrToPico rejects negative', false); } catch { ok('xmrToPico rejects negative', true); }
+
+// error classification: a thrown malformed-proof error is terminal (invalid),
+// a connection error is transient (node-error). drives node-error vs invalid.
+ok('isTransientError: "Wrong signature size" → false (bad proof, terminal)', isTransientError(new Error('Wrong signature size')) === false);
+ok('isTransientError: "Invalid proof" → false', isTransientError(new Error('Invalid proof')) === false);
+ok('isTransientError: "Failed to get transaction from daemon" → true (retry)', isTransientError(new Error('Failed to get transaction from daemon')) === true);
+ok('isTransientError: "connect ECONNREFUSED" → true', isTransientError(new Error('connect ECONNREFUSED 1.2.3.4:18081')) === true);
+ok('isTransientError: "node unreachable" → true', isTransientError(new Error('node unreachable: http://x')) === true);
+
+// exact top-up math (piconero) — the "send X more" number must NEVER drift like
+// float subtraction would. picoToXmrString first, then the shortfall it feeds.
+ok('picoToXmrString 0.2 exact', picoToXmrString(200000000000n) === '0.2');
+ok('picoToXmrString trims trailing zeros', picoToXmrString(50000000000n) === '0.05');
+ok('picoToXmrString keeps a nonce tail', picoToXmrString(50000004821n) === '0.050000004821');
+ok('picoToXmrString whole number', picoToXmrString(5000000000000n) === '5');
+ok('picoToXmrString 1 piconero', picoToXmrString(1n) === '0.000000000001');
+const _u1 = classifyResult({ isGood: true, receivedPico: 100000000000n, confirmations: 1, inTxPool: false }, { expectedPico: 300000000000n, minConfirmations: 1 });
+ok('shortfall 0.3 − 0.1 = 0.2 EXACT (float gives 0.19999…)', _u1.status === 'underpaid' && _u1.shortfallXmr === '0.2', _u1.shortfallXmr);
+const _u2 = classifyResult({ isGood: true, receivedPico: 50000000000n, confirmations: 1, inTxPool: false }, { expectedPico: 100000004821n, minConfirmations: 1 });
+ok('shortfall to a nonce amount is exact to the piconero', _u2.shortfallXmr === '0.050000004821', _u2.shortfallXmr);
+const _u3 = classifyResult({ isGood: true, receivedPico: 99999999999n, confirmations: 1, inTxPool: false }, { expectedPico: 100000000000n, minConfirmations: 1 });
+ok('shortfall of exactly 1 piconero', _u3.shortfallXmr === '0.000000000001', _u3.shortfallXmr);
 
 (async () => {
     const base = { txid: OK_TXID, proof: OK_KEY, address: MAINNET_ADDR, amount: '0.1', nodes: NODES };

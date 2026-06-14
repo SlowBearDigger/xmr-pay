@@ -8,19 +8,70 @@
 // to localhost or a private network; if you must expose it, put a reverse
 // proxy with auth in front (wallet-rpc's digest auth is not implemented here).
 
-const { xmrToPico, picoToXmr, isValidAddress, isValidTxid, detectProofKind, classifyResult, fetchUnlockTime } = require('./verify');
+const { xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, fetchUnlockTime } = require('./verify');
 
 async function rpc(url, method, params = {}, timeoutMs = 15000) {
-    const r = await fetch(String(url).replace(/\/+$/, '') + '/json_rpc', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: '0', method, params }),
-        signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!r.ok) throw new Error(`wallet-rpc http ${r.status}`);
+    let r;
+    try {
+        r = await fetch(String(url).replace(/\/+$/, '') + '/json_rpc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: '0', method, params }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    } catch (e) {
+        // network refused, dropped, or timed out — transient, the caller should
+        // retry, NOT treat the payment as failed. tagged so verify can tell it
+        // apart from a proof that genuinely doesn't verify.
+        throw Object.assign(e instanceof Error ? e : new Error(String(e)), { transient: true });
+    }
+    if (!r.ok) throw Object.assign(new Error(`wallet-rpc http ${r.status}`), { transient: true });
     const j = await r.json();
+    // a json-rpc error is a protocol-level answer (e.g. a bad tx key) — a verdict,
+    // not a transport failure — so it is deliberately NOT tagged transient.
     if (j.error) throw new Error(`wallet-rpc: ${j.error.message || JSON.stringify(j.error)}`);
     return j.result;
+}
+
+// pure summing classifier shared by the wallet-rpc watcher AND the WASM scanner
+// (src/scanner.js) — so the two transports never drift on what counts as paid.
+// SUMS confirmed transfers (a buyer who paid in two installments still completes),
+// holds back pool + time-locked outputs, and reports an EXACT piconero shortfall.
+// rows: [{ txid, amountPico (BigInt), confirmations, inPool, locked }]
+function summarizeTransfers(rows, expectedPico, minConfirmations = 1) {
+    let confirmedSum = 0n, pendingSum = 0n, lockedSum = 0n;
+    let minConfs = Infinity;
+    const txids = [];
+    for (const t of rows) {
+        txids.push(t.txid);
+        if (t.locked) { lockedSum += t.amountPico; continue; }
+        if (!t.inPool && t.confirmations >= minConfirmations) {
+            confirmedSum += t.amountPico;
+            minConfs = Math.min(minConfs, t.confirmations);
+        } else {
+            pendingSum += t.amountPico;
+        }
+    }
+    // everything that has ARRIVED on-chain — confirmed, in the pool, OR confirmed
+    // but still in its ~10-block lock window. the shortfall is measured against
+    // this so a top-up prompt never tells the buyer to re-send money that is
+    // already here: locked funds just need to mature, there's nothing more to pay.
+    const seenPico = confirmedSum + pendingSum + lockedSum;
+    const base = {
+        receivedXmr: picoToXmr(confirmedSum),
+        pendingXmr: picoToXmr(pendingSum),
+        lockedXmr: picoToXmr(lockedSum),
+        requiredXmr: picoToXmr(expectedPico),
+        // exact; counts money already seen (incl. locked) so a top-up never overpays
+        shortfallXmr: picoToXmrString(seenPico < expectedPico ? expectedPico - seenPico : 0n),
+        confirmations: minConfs === Infinity ? 0 : minConfs,
+        txids,
+    };
+    if (confirmedSum >= expectedPico) return { paid: true, status: 'paid', reason: 'received on-chain', ...base };
+    if (lockedSum + confirmedSum >= expectedPico) return { paid: false, status: 'locked', reason: 'enough arrived but some outputs are time-locked', ...base };
+    if (confirmedSum + pendingSum >= expectedPico) return { paid: false, status: 'mempool', reason: 'enough seen, waiting for confirmations', ...base };
+    if (confirmedSum > 0n || pendingSum > 0n) return { paid: false, status: 'partial', reason: 'partial payment so far', ...base };
+    return { paid: false, status: 'pending', reason: 'nothing received yet', ...base };
 }
 
 function createWatcher({ url, accountIndex = 0 } = {}) {
@@ -44,9 +95,11 @@ function createWatcher({ url, accountIndex = 0 } = {}) {
                 txid: t.txid,
                 // wallet-rpc returns amount as a JSON number (atomic units). that
                 // is exact below 2^53 piconero (~9007 XMR per transfer); a single
-                // transfer larger than that could lose precision before BigInt
-                // sees it. fine for normal payments; relevant only for whales.
-                amountPico: BigInt(t.amount),
+                // transfer larger than that could lose precision before it is read.
+                // fine for normal payments; relevant only for whales. atomicToPico
+                // rejects a malformed amount loudly rather than producing a wrong
+                // BigInt.
+                amountPico: atomicToPico(t.amount),
                 confirmations: Number(t.confirmations || 0),
                 inPool: t.type === 'pool',
                 // recent wallet-rpc reports `locked`; fall back to unlock_time
@@ -58,35 +111,8 @@ function createWatcher({ url, accountIndex = 0 } = {}) {
         // classify one order. unlike proof mode this SUMS transfers, so a buyer
         // who paid in two installments still resolves to paid.
         async checkOrder({ subaddressIndex, amount, minConfirmations = 1 }) {
-            const expected = xmrToPico(amount);
             const rows = await this.incoming(subaddressIndex);
-
-            let confirmedSum = 0n, pendingSum = 0n, lockedSum = 0n;
-            let minConfs = Infinity;
-            const txids = [];
-            for (const t of rows) {
-                txids.push(t.txid);
-                if (t.locked) { lockedSum += t.amountPico; continue; }
-                if (!t.inPool && t.confirmations >= minConfirmations) {
-                    confirmedSum += t.amountPico;
-                    minConfs = Math.min(minConfs, t.confirmations);
-                } else {
-                    pendingSum += t.amountPico;
-                }
-            }
-
-            const base = {
-                receivedXmr: picoToXmr(confirmedSum),
-                pendingXmr: picoToXmr(pendingSum),
-                requiredXmr: picoToXmr(expected),
-                confirmations: minConfs === Infinity ? 0 : minConfs,
-                txids,
-            };
-            if (confirmedSum >= expected) return { paid: true, status: 'paid', reason: 'received on-chain', ...base };
-            if (lockedSum + confirmedSum >= expected) return { paid: false, status: 'locked', reason: 'enough arrived but some outputs are time-locked', ...base };
-            if (confirmedSum + pendingSum >= expected) return { paid: false, status: 'mempool', reason: 'enough seen, waiting for confirmations', ...base };
-            if (confirmedSum > 0n || pendingSum > 0n) return { paid: false, status: 'partial', reason: 'partial payment so far', ...base };
-            return { paid: false, status: 'pending', reason: 'nothing received yet', ...base };
+            return summarizeTransfers(rows, xmrToPico(amount), minConfirmations);
         },
 
         async height() {
@@ -168,22 +194,28 @@ async function verifyPaymentViaRpc(opts) {
             ? await rpc(url, 'check_tx_key', { txid: id, tx_key: proof.trim(), address }, timeoutMs)
             : await rpc(url, 'check_tx_proof', { txid: id, address, message, signature: proof.trim() }, timeoutMs);
     } catch (e) {
-        // an invalid key/proof is reported by wallet-rpc as an error; so is an
-        // unreachable wallet. both mean "not verified here".
+        // a transient transport failure (wallet-rpc down, slow, HTTP 500) is
+        // retryable and must read differently from a proof that genuinely doesn't
+        // verify (a json-rpc error, e.g. a bad key) — the merchant retries the
+        // first, rejects the second.
+        if (e && e.transient) return fail('node-error', `wallet-rpc unreachable: ${e.message}`);
         return fail('invalid', `proof did not verify via wallet-rpc: ${e.message}`);
     }
 
     const isGood = proofKind === 'txkey' ? true : !!check.good;
     // wallet-rpc returns atomic units as a JSON number — exact below 2^53
-    // piconero (~9007 XMR); whale-only precision caveat, same as watch mode.
-    const receivedPico = BigInt(check.received ?? 0);
+    // piconero (~9007 XMR); whale-only precision caveat. parse defensively: a
+    // malformed amount fails closed (invalid) instead of throwing uncaught.
+    let receivedPico;
+    try { receivedPico = atomicToPico(check.received); }
+    catch (e) { return fail('invalid', `wallet-rpc returned a malformed amount: ${e.message}`); }
     const confirmations = Number(check.confirmations || 0);
     const inTxPool = !!check.in_pool;
-    const base = { receivedXmr: picoToXmr(receivedPico), confirmations, txid: id, transport: 'wallet-rpc' };
+    const base = { receivedXmr: picoToXmr(receivedPico), confirmations, txid: id, expectedXmr: picoToXmr(expectedPico), transport: 'wallet-rpc' };
 
     const tolerancePico = toleranceXmr ? xmrToPico(toleranceXmr) : 0n;
     const r = classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { expectedPico, tolerancePico, minConfirmations });
-    if (r.status !== 'ok') return { paid: false, status: r.status, reason: r.reason, ...base };
+    if (r.status !== 'ok') return { paid: false, status: r.status, reason: r.reason, shortfallXmr: r.shortfallXmr, ...base };
 
     if (!skipUnlockTimeCheck) {
         const unlockTime = await unlockTimeViaRpc(url, id, nodes, timeoutMs);
@@ -205,4 +237,4 @@ async function verifyPaymentViaRpc(opts) {
     };
 }
 
-module.exports = { createWatcher, verifyPaymentViaRpc };
+module.exports = { createWatcher, verifyPaymentViaRpc, summarizeTransfers };

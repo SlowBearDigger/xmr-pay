@@ -1,6 +1,6 @@
 {
   "name": "xmr-pay",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "description": "Sovereign Monero payments toolkit. Client-side payment links + QR (core), stateless on-chain proof verification (verify), signed fulfillment webhooks (webhook), and a zero-dependency checkout widget. No accounts, no API keys, no third parties in the payment path.",
   "main": "src/verify.js",
   "exports": {
@@ -9,6 +9,8 @@
     "./core": "./src/core.js",
     "./config": "./src/config.js",
     "./watch": "./src/watch.js",
+    "./scanner": "./src/scanner.js",
+    "./agent": "./src/agent.js",
     "./webhook": "./src/webhook.js",
     "./package.json": "./package.json"
   },
@@ -20,7 +22,8 @@
     "LICENSE",
     "docs/DEPLOY.md",
     "docs/WALLETS.md",
-    "docs/SUITE.md"
+    "docs/SUITE.md",
+    "docs/AGENT.md"
   ],
   "license": "MIT",
   "author": "SlowBearDigger",
@@ -54,8 +57,13 @@
   "scripts": {
     "build": "bash scripts/build-widget.sh",
     "release": "bash scripts/release.sh",
-    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js",
+    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js",
     "test:live": "node test/live-stagenet.js",
+    "test:scanner": "node test/live-scanner.js",
+    "test:fastsync": "node test/scanner-fastsync.js",
+    "test:summing": "node test/live-summing.js",
+    "test:agent": "node test/live-agent.js",
+    "agent": "node examples/scanner-agent.js",
     "demo": "node examples/demo-server.js"
   }
 }
