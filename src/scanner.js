@@ -44,7 +44,14 @@ function toRow(t) {
     const confirmations = Number(call(tx, 'getNumConfirmations', 'numConfirmations') ?? 0) || 0;
     const isConfirmed = !!call(tx, 'getIsConfirmed', 'isConfirmed');
     const inPool = !isConfirmed || !!call(tx, 'getInTxPool', 'inTxPool');
-    const locked = !!call(tx, 'getIsLocked', 'isLocked');
+    // "locked" = an EXPLICIT unlock_time (the time-lock scam), NOT the benign
+    // ~10-block maturation that getIsLocked() also reports. otherwise the scanner
+    // would hold a normal confirmed payment as `locked` for 10 blocks while the
+    // wallet-rpc watcher and proof mode (which gate on unlock_time only) already
+    // call it paid — a drift between transports. maturation is governed by
+    // confirmations + minConfirmations; this gates only the malicious freeze.
+    const ut = call(tx, 'getUnlockTime', 'unlockTime');
+    const locked = ut != null && String(ut) !== '' && String(ut) !== '0';
     const txid = call(tx, 'getHash', 'hash') || call(t, 'getTxHash', 'txHash') || null;
     const amountPico = big(call(t, 'getAmount', 'amount') ?? 0n);
     return { txid, amountPico, confirmations, inPool, locked };

@@ -93,6 +93,7 @@ function send(res, code, body) {
             }
             const m = url.match(/^\/order\/([^/]+)$/);
             if (req.method === 'GET' && m) {
+                if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
                 const r = await agent.check(decodeURIComponent(m[1]));
                 if (!r) return send(res, 404, { error: 'unknown order' });
                 return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, confirmations: r.confirmations, txids: r.txids });

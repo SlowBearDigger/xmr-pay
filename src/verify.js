@@ -228,7 +228,10 @@ async function unlockTimeFromNode(uri, txid) {
         const j = await r.json();
         const tx = j && Array.isArray(j.txs) && j.txs[0];
         if (!tx || !tx.as_json) return null;
-        if (tx.tx_hash && String(tx.tx_hash).toLowerCase() !== txid) return null;
+        // require the daemon to echo a MATCHING tx_hash — a response that omits it
+        // (or returns a different tx's blob) cannot be trusted for the time-lock
+        // gate, so fail closed rather than read someone else's unlock_time.
+        if (!tx.tx_hash || String(tx.tx_hash).toLowerCase() !== txid) return null;
         const decoded = JSON.parse(tx.as_json);
         if (decoded.unlock_time === undefined || decoded.unlock_time === null) return null;
         return BigInt(String(decoded.unlock_time));
