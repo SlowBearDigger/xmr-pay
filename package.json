@@ -51,7 +51,6 @@
     "serverless",
     "widget"
   ],
-  "dependencies": {},
   "peerDependencies": {
     "monero-ts": ">=0.11.0"
   },
@@ -63,7 +62,7 @@
   "scripts": {
     "build": "bash scripts/build-widget.sh",
     "release": "bash scripts/release.sh",
-    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/receipt.test.js && node test/agent-cli.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/config-pin.test.js && node test/scanner-birthday.test.js && node test/stress.test.js",
+    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/receipt.test.js && node test/agent-cli.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/config-pin.test.js && node test/scanner-birthday.test.js && node test/reorg.test.js && node test/property.test.js && node test/stress.test.js",
     "test:live": "node test/live-stagenet.js",
     "test:scanner": "node test/live-scanner.js",
     "test:fastsync": "node test/scanner-fastsync.js",
@@ -71,5 +70,8 @@
     "test:agent": "node test/live-agent.js",
     "agent": "node examples/scanner-agent.js",
     "demo": "node examples/demo-server.js"
+  },
+  "devDependencies": {
+    "fast-check": "^4.8.0"
   }
 }
