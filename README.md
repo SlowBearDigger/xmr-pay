@@ -291,6 +291,13 @@ never the signal to release goods.
 `xmr-pay:paid` event in devtools or point the widget at a fake server — it only
 fools their own screen; your server never verified a real payment.
 
+**Node trust.** Verification is only as honest as the nodes you query. The default
+`quorum` is `1` (fast, single node) — set `quorum: 2`–`3` for serious volume so
+independent nodes must agree (it fails **closed** on disagreement, so availability
+then rides on your nodes). For the highest confidence run your own `monerod` and
+use **RPC mode** (`verifyPaymentViaRpc` against your own `monero-wallet-rpc`) —
+that sidesteps the bundled WASM wallet and its transitive dependencies entirely.
+
 <details>
 <summary><b>Threat model</b></summary>
 

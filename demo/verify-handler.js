@@ -39,6 +39,7 @@ async function handleVerify(body) {
         nodes: NODES,
         networkType: NETWORK,
         minConfirmations: 1,
+        quorum: Number(process.env.XMR_QUORUM || 2),   // two stagenet nodes must agree
     });
     return { code: 200, body: result };
 }
