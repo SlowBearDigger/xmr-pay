@@ -57,7 +57,7 @@ const unlocked = { transfer: { unlock_time: 0 } };
 
     // ---- happy path ----
     r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: unlocked }, () => verifyPaymentViaRpc(base));
-    ok('good proof + unlocked + confs → paid', r.paid && r.status === 'paid' && r.transport === 'wallet-rpc', r.reason);
+    ok('good proof + unlocked + confs → paid', r.paid && r.status === 'paid' && r.transport === 'wallet-rpc' && /verified/.test(r.reason), r.reason);
     ok('paid reports receivedXmr 0.1', Math.abs(r.receivedXmr - 0.1) < 1e-9);
 
     r = await withRpc({ check_tx_proof: good({ received: 150000000000 }), get_transfer_by_txid: unlocked }, () => verifyPaymentViaRpc(base));
@@ -76,8 +76,13 @@ const unlocked = { transfer: { unlock_time: 0 } };
     ok('confs < min, not pool → unconfirmed', !r.paid && r.status === 'unconfirmed');
 
     // ---- time-lock gate ----
-    r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: { transfer: { unlock_time: 3000000 } } }, () => verifyPaymentViaRpc(base));
-    ok('time-locked tx → locked (never paid)', !r.paid && r.status === 'locked', r.reason);
+    const lockedRpc = { check_tx_proof: good(), get_transfer_by_txid: { transfer: { unlock_time: 3000000 } } };
+    r = await withRpc(lockedRpc, () => verifyPaymentViaRpc(base));
+    ok('time-locked tx → locked (never paid)', !r.paid && r.status === 'locked' && /time-locked|unlock_time/.test(r.reason), r.reason);
+    // skipUnlockTimeCheck bypasses the gate — the SAME locked tx now settles (the
+    // flag must actually be honoured; documented as NOT recommended).
+    r = await withRpc(lockedRpc, () => verifyPaymentViaRpc({ ...base, skipUnlockTimeCheck: true }));
+    ok('skipUnlockTimeCheck=true → the time-lock gate is bypassed → paid', r.paid && r.status === 'paid', r.reason);
 
     // wallet has no record → fall back to daemon nodes for the unlock gate
     r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: 'error', daemonUnlock: 0 }, () => verifyPaymentViaRpc({ ...base, nodes: ['http://node:38081'] }));
@@ -91,11 +96,15 @@ const unlocked = { transfer: { unlock_time: 0 } };
     r = await withRpc({ check_tx_key: { received: 100000000000, confirmations: 5, in_pool: false }, get_transfer_by_txid: unlocked }, () => verifyPaymentViaRpc({ ...base, proof: OK_KEY }));
     ok('check_tx_key path → paid', r.paid && r.status === 'paid', r.reason);
     r = await withRpc({ check_tx_key: 'error' }, () => verifyPaymentViaRpc({ ...base, proof: OK_KEY }));
-    ok('wallet-rpc error on bad key → invalid', !r.paid && r.status === 'invalid');
+    ok('wallet-rpc error on bad key → invalid (reason names the rpc failure)', !r.paid && r.status === 'invalid' && /wallet-rpc/.test(r.reason), r.reason);
+
+    // wallet-rpc returns a non-numeric amount → caught as a malformed-amount invalid
+    r = await withRpc({ check_tx_proof: good({ received: 'not-a-number' }), get_transfer_by_txid: unlocked }, () => verifyPaymentViaRpc(base));
+    ok('malformed amount from wallet-rpc → invalid (reason says malformed)', !r.paid && r.status === 'invalid' && /malformed amount/.test(r.reason), r.reason);
 
     // ---- replay gate (caller's alreadyUsed) ----
     r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: unlocked }, () => verifyPaymentViaRpc({ ...base, alreadyUsed: async () => true }));
-    ok('alreadyUsed → replay', !r.paid && r.status === 'replay');
+    ok('alreadyUsed → replay (reason explains why)', !r.paid && r.status === 'replay' && /already used|another order/.test(r.reason), r.reason);
 
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);

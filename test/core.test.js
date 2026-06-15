@@ -38,7 +38,21 @@ ok('accepts a stagenet address under stagenet', core.makePaymentURI({ address: S
 const svg = core.qrSvg('monero:' + MAIN + '?tx_amount=0.05');
 ok('qrSvg returns an svg', svg.startsWith('<svg') && svg.endsWith('</svg>'));
 ok('qrSvg has modules', (svg.match(/<rect/g) || []).length > 50);
-ok('qrSvg is labelled for screen readers', svg.includes('aria-label'));
+ok('qrSvg is labelled for screen readers', svg.includes('aria-label="Monero payment QR"'));
+ok('qrSvg declares the namespace + crisp edges', svg.includes('xmlns="http://www.w3.org/2000/svg"') && svg.includes('shape-rendering="crispEdges"'));
+ok('qrSvg viewBox is square, starts at 0 0', /viewBox="0 0 (\d+) \1"/.test(svg));
+ok('default rects are scale×scale (4)', svg.includes('width="4" height="4"'));
+ok('default module + finder colours both present', svg.includes('fill="#F26822"') && svg.includes('fill="#000000"'));
+ok('qrSvg is deterministic', core.qrSvg('abc') === core.qrSvg('abc'));
+ok('qrSvg depends on its content', core.qrSvg('a') !== core.qrSvg('b'));
+const vb = s => Number(s.match(/viewBox="0 0 (\d+)/)[1]);
+ok('scale=8 → 8×8 rects', core.qrSvg('x', { scale: 8 }).includes('width="8" height="8"'));
+ok('scale doubles the viewBox', vb(core.qrSvg('x', { scale: 8 })) === vb(core.qrSvg('x', { scale: 4 })) * 2);
+ok('a larger quiet zone widens the viewBox', vb(core.qrSvg('x', { quietZone: 6 })) > vb(core.qrSvg('x', { quietZone: 2 })));
+const cc = core.qrSvg('x', { moduleColor: '#112233', finderColor: '#445566' });
+ok('custom colours override the defaults', cc.includes('fill="#112233"') && cc.includes('fill="#445566"') && !cc.includes('#F26822'));
+// top-left module is a finder module → finderColor, at offset quietZone*scale (2*4=8)
+ok('finder module uses finderColor at the quiet-zone offset', cc.includes('x="8" y="8" width="4" height="4" fill="#445566"'));
 
 // ── picoToXmrString round-trip ──────────────────────────────────────────────
 ok('pico → string → pico round-trips', core.picoToXmrString(50000000817n) === '0.050000000817' && xmrToPico('0.050000000817') === 50000000817n);
