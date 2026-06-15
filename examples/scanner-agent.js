@@ -124,6 +124,9 @@ function send(res, code, body) {
         // wallet — it just won't auto-complete (reconcile from the [expired] log).
         expiryMs: Math.max(0, (Number(env.XMR_EXPIRY_HOURS) || 0) * 3600000),
         onExpire: (order) => { console.log(`[expired] ${order.id} · unpaid > ${env.XMR_EXPIRY_HOURS}h · dropped`); queueSave(store); },
+        // retire SETTLED orders too (the store/webhook is the source of truth) so a
+        // long-running agent's memory + ledger stay bounded. 0 = keep forever.
+        paidRetentionMs: Math.max(0, (Number(env.XMR_PAID_RETENTION_HOURS) || 0) * 3600000),
         onPaid: async (order) => {
             saveOrders(store);
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
