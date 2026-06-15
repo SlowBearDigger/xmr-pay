@@ -14,6 +14,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
     const orders = store || new Map();
+    const reserving = new Set();   // ids in-flight (created but not yet stored) — closes the create-order TOCTOU
     let counter = 0;
     const nextId = idgen || (() => `ord_${(++counter).toString(36)}`);
 
@@ -38,22 +39,30 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
     async function createOrder({ amount, id, index, label } = {}) {
         if (amount == null || amount === '') throw new Error('amount is required');
         const oid = id || nextId();
-        if (orders.has(oid)) throw new Error(`order ${oid} already exists`);
-        let address, idx, birthdayHeight = null;
-        if (index != null) {
-            idx = index;
-            address = await scanner.addressAt(index);
-        } else if (pool.length) {
-            const s = pool.shift();
-            address = s.address; idx = s.index; birthdayHeight = s.atHeight;
-            if (subaddressPool && pool.length < poolFloor) fillPool(subaddressPool - pool.length);   // top up in the background
-        } else {
-            const sub = await scanner.newSubaddress(label || oid);
-            address = sub.address; idx = sub.index; birthdayHeight = sub.atHeight;
+        // reject duplicates AND reserve the id BEFORE any await — otherwise two
+        // concurrent createOrder calls with the same id both pass the has() check
+        // and both allocate a subaddress (the order would point at only the last).
+        if (orders.has(oid) || reserving.has(oid)) throw new Error(`order ${oid} already exists`);
+        reserving.add(oid);
+        try {
+            let address, idx, birthdayHeight = null;
+            if (index != null) {
+                idx = index;
+                address = await scanner.addressAt(index);
+            } else if (pool.length) {
+                const s = pool.shift();
+                address = s.address; idx = s.index; birthdayHeight = s.atHeight;
+                if (subaddressPool && pool.length < poolFloor) fillPool(subaddressPool - pool.length);   // top up in the background
+            } else {
+                const sub = await scanner.newSubaddress(label || oid);
+                address = sub.address; idx = sub.index; birthdayHeight = sub.atHeight;
+            }
+            const order = { id: oid, amount: String(amount), address, index: idx, birthdayHeight, status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: String(amount), txids: [] };
+            orders.set(oid, order);
+            return { ...order };
+        } finally {
+            reserving.delete(oid);
         }
-        const order = { id: oid, amount: String(amount), address, index: idx, birthdayHeight, status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: String(amount), txids: [] };
-        orders.set(oid, order);
-        return { ...order };
     }
 
     // live-check an order against the chain and fold the result into its state.
