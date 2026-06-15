@@ -45,6 +45,14 @@ Monero node from somewhere you trust.
 npm i xmr-pay monero-ts        # monero-ts only needed for server-side detection
 ```
 
+**Run the agent in one command** (non-custodial — it holds only your view key):
+
+```
+npx xmr-pay        # setup wizard (address + view key + node), then it runs
+```
+
+It scans from the current block (no historical rescan), generates the token + webhook secret, persists its wallet + orders, and prints the exact values to paste into your store. `npx xmr-pay start` runs it again later.
+
 Donations welcome, no obligation:
 `42w9YaCW8UwZ2BmQztNmUd6JgYVcjW7LXEMTcQqHdmtFCsSo5RGY2eQg2iZ3WyBSSs63gnhczLkJ46yfr4ojCXWT3H1ZBbR`
 
