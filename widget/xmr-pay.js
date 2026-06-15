@@ -2316,7 +2316,9 @@ var XP_STR = {
         txidPh: 'Transaction ID (txid)', proofPh: 'Tx key or payment proof',
         proofHint: 'Feather: History → right-click the tx → Create tx proof. GUI: open the tx → “P”. Cake/Monerujo: tx details → transaction key. Paste it all in either box — txid and proof sort themselves out.',
         verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard — paste manually',
+        detectBtn: "I've paid — detect it", detecting: 'Checking the blockchain…', watching: 'Watching the blockchain for your payment…',
         paidTitle: 'Payment confirmed', confs: 'confirmations',
+        receiptSigner: 'Signed by', receiptDownload: 'Download receipt', receiptVerify: 'Verify receipt',
         underpaid: 'Received {r} XMR, expected {e}',
         topupMsg: 'Detected {r} XMR — send {s} more to complete',
         topupTitle: 'Scan to send the difference',
@@ -2349,7 +2351,9 @@ var XP_STR = {
         txidPh: 'ID de transacción (txid)', proofPh: 'Tx key o prueba de pago',
         proofHint: 'Feather: History → clic derecho en la tx → Create tx proof. GUI: abre la tx → “P”. Cake/Monerujo: detalles de la tx → transaction key. Pega todo en cualquier caja — txid y prueba se acomodan solos.',
         verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles — pega a mano',
+        detectBtn: 'Ya pagué — detectar', detecting: 'Revisando la blockchain…', watching: 'Esperando tu pago en la blockchain…',
         paidTitle: 'Pago confirmado', confs: 'confirmaciones',
+        receiptSigner: 'Firmado por', receiptDownload: 'Descargar recibo', receiptVerify: 'Verificar recibo',
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
         topupMsg: 'Detectado {r} XMR — envía {s} más para completar',
         topupTitle: 'Escanea para enviar la diferencia',
@@ -2435,6 +2439,15 @@ var XP_CSS = [
     'margin:0 auto 10px;color:var(--xp-green);font-size:26px;}',
     '.ok .t{font-size:13px;font-weight:800;text-transform:var(--xp-case);}',
     '.ok .c{font-size:10px;color:var(--xp-muted);margin-top:5px;}',
+    '.rcpt{margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;}',
+    '.rcpt .fp{font-size:9px;color:var(--xp-muted);letter-spacing:var(--xp-track);word-break:break-all;}',
+    '.rcpt .lk{display:inline-block;font-size:11px;font-weight:700;text-decoration:none;padding:8px 14px;border-radius:var(--xp-radius-sm);border:var(--xp-bw-in) solid var(--xp-border);color:var(--xp-fg);text-transform:var(--xp-case);}',
+    '.rcpt .lk[download]{background:var(--xp-accent);color:#000;border-color:transparent;}',
+    '.watch{display:flex;flex-direction:column;gap:8px;}',
+    '.detect{width:100%;background:var(--xp-btn-bg);color:var(--xp-btn-fg);border:0;border-radius:var(--xp-radius-sm);padding:11px;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;text-transform:var(--xp-case);letter-spacing:var(--xp-track);}',
+    '.detect:hover{background:var(--xp-btn-hv);}',
+    '.detect:disabled{opacity:.55;cursor:default;}',
+    '.wst{font-size:11px;color:var(--xp-yellow);text-align:center;margin:0;}',
     '.hidden{display:none;}',
 ].join('');
 
@@ -2499,7 +2512,7 @@ async function xpVerifyConfig(env) {
 }
 
 class XmrPay extends HTMLElement {
-    static get observedAttributes() { return ['address', 'amount', 'label', 'order', 'verify-url', 'lang', 'redirect-url', 'theme']; }
+    static get observedAttributes() { return ['address', 'amount', 'label', 'order', 'verify-url', 'status-url', 'lang', 'redirect-url', 'theme']; }
 
     connectedCallback() { this._resolve().then(() => this._render()); }
     attributeChangedCallback() { if (this.isConnected) this._resolve().then(() => this._render()); }
@@ -2565,6 +2578,7 @@ class XmrPay extends HTMLElement {
         var addr = this._addr || '';
         var amount = this._amount || '';
         var verifyUrl = (this.getAttribute('verify-url') || '').trim();
+        var statusUrl = (this.getAttribute('status-url') || '').trim();
         var sign = this._sign || { state: 'unsigned' };
         var root = this.shadowRoot || this.attachShadow({ mode: 'open' });
 
@@ -2600,6 +2614,14 @@ class XmrPay extends HTMLElement {
             '<button class="addr" type="button" aria-label="' + t.addrLabel + '"><b>' + fpHead + '</b>' + fpMid + '<b>' + fpTail + '</b></button>' +
             '<a class="wallet" href="' + xpEsc(this._uri()) + '">' + t.openWallet + '</a>' +
             '</div>' +
+            // watch mode: the agent is already scanning (view key), so the buyer
+            // just taps "detect" — no txid/proof to paste. auto-polls too.
+            (statusUrl ?
+                '<div class="sec watch">' +
+                '<button class="go detect" type="button">' + t.detectBtn + '</button>' +
+                '<p class="wst" role="status" aria-live="polite">● ' + t.watching + '</p>' +
+                '</div>'
+                : '') +
             '<div class="sec">' +
             '<button class="tgl trust-toggle" type="button" aria-expanded="false"><span>⛨ ' + t.trustToggle + '</span><span class="car">▾</span></button>' +
             '<div class="fold trust-body hidden">' +
@@ -2659,6 +2681,16 @@ class XmrPay extends HTMLElement {
 
         var verifyBtn = root.querySelector('.verify');
         if (verifyBtn) verifyBtn.addEventListener('click', function () { self._verify(root, verifyUrl, t); });
+
+        // watch mode: wire the "detect" button + start auto-polling the status URL.
+        var statusUrl = (this.getAttribute('status-url') || '').trim();
+        var detectBtn = root.querySelector('.detect');
+        if (statusUrl) {
+            this._paidDone = false;
+            if (detectBtn) detectBtn.addEventListener('click', function () { self._watch(root, statusUrl, t, true); });
+            clearTimeout(this._watchT);
+            this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, 1500);
+        }
 
         // smart paste: Feather's "formatted proof" (and similar) is one text
         // block with txid + address + signature. accept the whole thing in
@@ -2773,20 +2805,101 @@ class XmrPay extends HTMLElement {
         }
     }
 
+    // watch mode poll: GET the status URL (the agent /order/:id or a proxy) and
+    // react. no proof to paste — the agent is already scanning the chain. keeps
+    // polling on mempool/unconfirmed; on paid → _success (→ receipt). `manual`
+    // is a buyer-triggered "detect" click (shows button feedback).
+    async _watch(root, statusUrl, t, manual) {
+        if (this._paidDone || !this.isConnected) return;
+        var self = this;
+        var btn = root.querySelector('.detect');
+        var wst = root.querySelector('.wst');
+        if (manual && btn) { btn.disabled = true; btn.textContent = t.detecting; }
+        var out = null;
+        try {
+            var r = await fetch(statusUrl, { headers: { Accept: 'application/json' } });
+            out = await r.json();
+        } catch (e) { out = { reachable: false }; }
+        if (manual && btn) { btn.disabled = false; btn.textContent = t.detectBtn; }
+        if (this._paidDone) return;
+
+        if (out && out.paid) {
+            this._paidDone = true; clearTimeout(this._watchT);
+            this.dispatchEvent(new CustomEvent('xmr-pay:result', { detail: out, bubbles: true, composed: true }));
+            this._success(root, out, t);
+            return;
+        }
+        if (wst) {
+            var status = out && out.status;
+            var msg;
+            if (status === 'mempool') msg = t.mempool;
+            else if (status === 'unconfirmed' && out.confirmations != null) msg = t.confirming.replace('{c}', out.confirmations);
+            else if ((status === 'partial' || status === 'underpaid') && out.shortfallXmr != null) msg = t.topupMsg.replace('{r}', out.receivedXmr != null ? out.receivedXmr : '?').replace('{s}', out.shortfallXmr);
+            else msg = '● ' + t.watching;
+            wst.textContent = msg;
+            wst.className = 'wst' + (status === 'mempool' || status === 'unconfirmed' ? ' mid' : '');
+        }
+        clearTimeout(this._watchT);
+        var delay = (out && (out.status === 'mempool' || out.status === 'unconfirmed')) ? 8000 : 6000;
+        this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, delay);
+    }
+
     _success(root, out, t) {
+        this._paidDone = true;
         clearTimeout(this._repollT);
+        clearTimeout(this._watchT);
         var st = root.querySelector('.st');
         if (st) { st.textContent = '✓ ' + t.paidTitle; st.classList.add('paid'); }
         var body = root.querySelector('.body');
         body.innerHTML = '<div class="ok"><div class="ring">✓</div><div class="t">' + t.paidTitle + '</div>' +
-            '<div class="c">' + (out.confirmations != null ? out.confirmations + ' ' + t.confs : '') + '</div></div>';
+            '<div class="c">' + (out.confirmations != null ? out.confirmations + ' ' + t.confs : '') + '</div>' +
+            '<div class="rcpt hidden"></div></div>';
+        // the cryptographic receipt — engine-level, so ANY embedder gets it (not
+        // just WooCommerce). on paid, fetch the merchant-signed receipt and show a
+        // download + a one-click link to the offline verifier.
+        var hasReceipt = !!( this.getAttribute('receipt-url') || '' ).trim();
+        if (hasReceipt) this._receipt(root, t);
         // UX signal ONLY — this runs in the buyer's browser, so a buyer can fire
         // this event (or fake this whole success state) from the console. NEVER
         // release goods on it. Fulfill on YOUR server's verifyPayment + order
         // record. (Same rule as Stripe: the client is not the authority.)
         this.dispatchEvent(new CustomEvent('xmr-pay:paid', { detail: out, bubbles: true, composed: true }));
+        // auto-redirect is opt-in (redirect-url). but a downloadable receipt must
+        // not be yanked away — when one is shown, keep the buyer on the page.
         var redirect = this.getAttribute('redirect-url');
-        if (redirect) setTimeout(function () { location.assign(redirect); }, 2500);
+        if (redirect && !hasReceipt) setTimeout(function () { location.assign(redirect); }, 2500);
+    }
+
+    // fetch the signed receipt (from receipt-url, the agent /receipt/:id or a
+    // store proxy) and render the download + verifier links. verify-page points
+    // at the offline verifier (default 'verify-receipt.html'); the receipt rides
+    // in its URL #fragment so the verifier needs no backend.
+    async _receipt(root, t) {
+        var url  = ( this.getAttribute('receipt-url') || '' ).trim();
+        var page = ( this.getAttribute('verify-page') || 'verify-receipt.html' ).trim();
+        var box  = root.querySelector('.rcpt');
+        if (!url || !box) return;
+        // the agent may still be minting the receipt (the on-chain tx_proof can
+        // take a moment) → it answers 409 until ready. retry a few times before
+        // giving up, so a freshly-paid order still shows its receipt.
+        var env = null;
+        for (var i = 0; i < 6 && !env; i++) {
+            try {
+                var r = await fetch(url, { headers: { Accept: 'application/json' } });
+                if (r.ok) { env = await r.json(); break; }
+                if (r.status !== 409) return;   // a real error (404/401) — stop
+            } catch (e) { /* transient — retry */ }
+            await new Promise(function (res) { setTimeout(res, 2000); });
+        }
+        if (!env || !env.sig || !env.receipt) return;
+        var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(env))));
+        var dl  = 'data:application/json;charset=utf-8;base64,' + b64;
+        var verify = page + '#' + b64.replace(/\+/g, '-').replace(/\//g, '_');
+        var fp = env.fingerprint ? '<div class="fp">' + xpEsc(t.receiptSigner + ' ' + env.fingerprint) + '</div>' : '';
+        box.innerHTML = fp +
+            '<a class="lk" download="receipt.json" href="' + dl + '">↓ ' + xpEsc(t.receiptDownload) + '</a>' +
+            '<a class="lk" target="_blank" rel="noopener" href="' + xpEsc(verify) + '">↗ ' + xpEsc(t.receiptVerify) + '</a>';
+        box.classList.remove('hidden');
     }
 }
 

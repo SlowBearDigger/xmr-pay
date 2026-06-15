@@ -369,7 +369,9 @@ async function verifyPayment(opts) {
 
     const confirmations = Math.min(...answers.map(a => a.confirmations));
     const receivedXmr = picoToXmr(head.receivedPico);
-    const base = { receivedXmr, confirmations, txid: id, nodesAgreed: answers.length, expectedXmr: picoToXmr(expectedPico) };
+    // expose the exact piconero too — callers that sum multiple payments (e.g.
+    // verifying a multi-tx receipt) must not go through the float `receivedXmr`.
+    const base = { receivedXmr, receivedPico: head.receivedPico.toString(), confirmations, txid: id, nodesAgreed: answers.length, expectedXmr: picoToXmr(expectedPico) };
 
     const tolerancePico = toleranceXmr ? xmrToPico(toleranceXmr) : 0n;
     const cls = classifyResult(

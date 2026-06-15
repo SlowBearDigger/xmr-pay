@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify a Monero payment receipt — xmr-pay</title>
+<style>
+  :root{ --bg:#0d0f0d; --fg:#e8e8e3; --dim:#8a8f87; --line:#22271f; --ok:#39d353; --bad:#ff5252; --acc:#ff6600; }
+  *{ box-sizing:border-box }
+  body{ margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 ui-monospace,"JetBrains Mono",SFMono-Regular,Menlo,monospace; padding:28px 18px; }
+  main{ max-width:760px; margin:0 auto; }
+  h1{ font-size:19px; margin:0 0 4px; letter-spacing:-.3px }
+  h1 b{ color:var(--acc) }
+  .sub{ color:var(--dim); margin:0 0 22px; font-size:13px }
+  textarea{ width:100%; min-height:150px; background:#070907; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:12px; font:inherit; resize:vertical }
+  .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0 }
+  button{ background:var(--acc); color:#000; border:0; border-radius:7px; padding:10px 18px; font:inherit; font-weight:700; cursor:pointer }
+  button.ghost{ background:transparent; color:var(--fg); border:1px solid var(--line) }
+  input[type=text]{ flex:1; min-width:200px; background:#070907; color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:9px 11px; font:inherit }
+  label{ color:var(--dim); font-size:12px }
+  .verdict{ display:none; border-radius:10px; padding:16px 18px; margin:18px 0; border:1px solid var(--line) }
+  .verdict.show{ display:block }
+  .verdict.ok{ border-color:var(--ok) }
+  .verdict.bad{ border-color:var(--bad) }
+  .verdict .big{ font-size:17px; font-weight:700 }
+  .verdict.ok .big{ color:var(--ok) }
+  .verdict.bad .big{ color:var(--bad) }
+  .verdict .why{ color:var(--dim); font-size:13px; margin-top:4px }
+  table{ width:100%; border-collapse:collapse; margin-top:10px; font-size:13px }
+  td{ padding:7px 8px; border-top:1px solid var(--line); vertical-align:top }
+  td.k{ color:var(--dim); white-space:nowrap; width:120px }
+  td.v{ word-break:break-all }
+  .chip{ display:inline-block; background:#161a14; border:1px solid var(--line); border-radius:5px; padding:1px 7px; font-size:12px; color:var(--acc) }
+  .proof{ border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:8px; font-size:12px; background:#070907 }
+  .proof .lbl{ color:var(--dim) }
+  .proof code{ word-break:break-all; color:var(--fg) }
+  .note{ color:var(--dim); font-size:12px; margin-top:8px }
+  a{ color:var(--acc) }
+  .copy{ cursor:pointer; color:var(--acc); font-size:11px; margin-left:6px }
+</style>
+</head>
+<body>
+<main>
+  <h1><b>xmr-pay</b> · receipt verifier</h1>
+  <p class="sub">Paste a payment receipt below. Verification runs entirely in your browser — nothing is uploaded. A valid receipt proves the merchant signed exactly these payment facts; if it carries tx_proofs, anyone with a Monero node can also confirm it against the chain.</p>
+
+  <textarea id="in" placeholder='Paste the receipt JSON (the signed envelope) here…' spellcheck="false"></textarea>
+  <div class="row">
+    <button id="go">Verify receipt</button>
+    <button class="ghost" id="sample">Load a sample</button>
+  </div>
+  <div class="row">
+    <label for="pin">Pin the merchant's fingerprint (optional, recommended):</label>
+    <input id="pin" type="text" placeholder="e.g. 952c-ea7e-e452-54d8-0dac-5451" spellcheck="false">
+  </div>
+
+  <div id="verdict" class="verdict">
+    <div class="big" id="vbig"></div>
+    <div class="why" id="vwhy"></div>
+    <table id="vtable"></table>
+    <div id="proofs"></div>
+  </div>
+
+  <p class="note">Offline check needs a browser with WebCrypto Ed25519 (recent Chrome / Safari / Firefox). The receipt format and this verifier are open source: <a href="https://github.com/SlowBearDigger/xmr-pay" target="_blank" rel="noopener">github.com/SlowBearDigger/xmr-pay</a> — host this file anywhere, it has no dependencies.</p>
+</main>
+
+<script>
+const TYP = 'xmr-pay.receipt/1';
+
+// deterministic JSON — identical to the signer's canonical() (sorted keys, no whitespace)
+function canonical(v){
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
+  return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
+}
+function pemToDer(pem){
+  const b64 = String(pem).replace(/-----[^-]+-----/g,'').replace(/\s+/g,'');
+  const bin = atob(b64), u = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
+  return u;
+}
+function b64ToBytes(b64){ const bin=atob(b64), u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); return u; }
+async function fingerprint(pubPem){
+  const h = await crypto.subtle.digest('SHA-256', pemToDer(pubPem));
+  const hex = [...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('');
+  return hex.slice(0,24).match(/.{4}/g).join('-');
+}
+// exact piconero → XMR string, no float
+function picoToXmr(pico){
+  let s = String(pico); const neg = s.startsWith('-'); if(neg) s=s.slice(1);
+  s = s.padStart(13,'0');
+  const whole = s.slice(0,-12), frac = s.slice(-12).replace(/0+$/,'');
+  return (neg?'-':'') + whole + (frac?'.'+frac:'');
+}
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function verifyEnvelope(env){
+  if (!env || typeof env!=='object' || env.typ!==TYP || !env.receipt || !env.sig || !env.pubkey) return { valid:false, reason:'not a signed xmr-pay receipt' };
+  if (env.receipt.typ!==TYP) return { valid:false, reason:'receipt body is not domain-tagged' };
+  let key, ok;
+  try{
+    key = await crypto.subtle.importKey('spki', pemToDer(env.pubkey), {name:'Ed25519'}, false, ['verify']);
+    ok = await crypto.subtle.verify({name:'Ed25519'}, key, b64ToBytes(env.sig), new TextEncoder().encode(canonical(env.receipt)));
+  }catch(e){ return { valid:false, reason:'bad key or signature encoding ('+e.message+')' }; }
+  const fp = await fingerprint(env.pubkey);
+  if (!ok) return { valid:false, reason:'signature does not match the receipt — it was altered', fingerprint:fp };
+  return { valid:true, reason:'signature is valid', fingerprint:fp };
+}
+
+function render(env, res, pin){
+  const v = document.getElementById('verdict');
+  const big = document.getElementById('vbig'), why = document.getElementById('vwhy');
+  const table = document.getElementById('vtable'), proofs = document.getElementById('proofs');
+  v.className = 'verdict show ' + (res.valid ? 'ok' : 'bad');
+  proofs.innerHTML = ''; table.innerHTML = '';
+
+  let pinNote = '';
+  if (res.valid && pin){
+    const norm = s => String(s).replace(/[^a-f0-9]/gi,'').toLowerCase();
+    if (norm(pin) === norm(res.fingerprint)) pinNote = ' · matches your pinned merchant ✓';
+    else { res.valid = false; pinNote = ' · DOES NOT match your pinned merchant ✗'; }
+  }
+  v.className = 'verdict show ' + (res.valid ? 'ok' : 'bad');
+  big.textContent = res.valid ? '✓ Authentic receipt' : '✗ Not verified';
+  why.textContent = res.reason + (res.fingerprint ? '  — signer ' + res.fingerprint + pinNote : '');
+
+  if (!env || !env.receipt) return;
+  const r = env.receipt;
+  const rows = [
+    ['Order', esc(r.orderId)],
+    ['Amount', '<span class="chip">'+picoToXmr(r.amountPico)+' XMR</span>'],
+    ['Received', picoToXmr(r.receivedPico)+' XMR'],
+    ['Paid to', esc(r.address)],
+    ['Network', esc(r.network||'—')],
+    ['Confirmations', esc(r.confirmations)],
+    ['Paid at', r.paidAt ? esc(new Date(r.paidAt).toISOString()) : '—'],
+    ['Merchant', esc((r.merchant&&r.merchant.name)||'—') + (r.merchant&&r.merchant.fingerprint?' · <span class="chip">'+esc(r.merchant.fingerprint)+'</span>':'')],
+    ['Signer fp', esc(res.fingerprint||'—')],
+    ['Tx hashes', (r.txids||[]).map(esc).join('<br>')||'—'],
+  ];
+  table.innerHTML = rows.map(([k,val])=>`<tr><td class="k">${k}</td><td class="v">${val}</td></tr>`).join('');
+
+  const tp = r.txProofs||[];
+  if (tp.length){
+    proofs.innerHTML = '<div class="note" style="margin-top:14px">On-chain proof (trustless) — this receipt carries '+tp.length+' Monero tx_proof'+(tp.length>1?'s':'')+'. Verify against the chain yourself, no trust in the merchant needed, e.g. in <code>monero-wallet-cli</code>: <code>check_tx_proof &lt;txid&gt; &lt;address&gt; "" &lt;signature&gt;</code></div>' +
+      tp.map(p=>`<div class="proof"><div class="lbl">txid <span class="copy" data-c="${esc(p.txid)}">copy</span></div><code>${esc(p.txid)}</code><div class="lbl" style="margin-top:6px">address</div><code>${esc(p.address)}</code><div class="lbl" style="margin-top:6px">signature <span class="copy" data-c="${esc(p.signature)}">copy</span></div><code>${esc(p.signature)}</code></div>`).join('');
+  } else {
+    proofs.innerHTML = '<div class="note" style="margin-top:14px">This receipt has the merchant signature only (no tx_proof). It proves the merchant attested the payment; for a fully trustless check the merchant would attach a Monero tx_proof.</div>';
+  }
+  proofs.querySelectorAll('.copy').forEach(el=>el.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(el.dataset.c); el.textContent='copied'; setTimeout(()=>el.textContent='copy',1200); });
+}
+
+async function run(){
+  let env;
+  try{ env = JSON.parse(document.getElementById('in').value.trim()); }
+  catch{ render(null,{valid:false,reason:'that is not valid JSON'}); return; }
+  const res = await verifyEnvelope(env);
+  render(env, res, document.getElementById('pin').value.trim());
+}
+
+document.getElementById('go').onclick = run;
+document.getElementById('sample').onclick = ()=>{
+  document.getElementById('in').value = JSON.stringify({
+    v:1, typ:TYP, alg:'ed25519',
+    receipt:{ typ:TYP, orderId:'ord_demo', address:'demo — load a real receipt from your agent', amountPico:'250000000000', receivedPico:'250000000000', txids:[], confirmations:10, paidAt:null, network:'stagenet', merchant:{fingerprint:'0000-0000-0000-0000-0000-0000'} },
+    pubkey:'(sample has no real signature — it will read as Not verified)', fingerprint:'0000-0000-0000-0000-0000-0000', sig:''
+  }, null, 2);
+};
+
+// shareable link: #<base64url(JSON)> auto-loads + verifies (the merchant's
+// thank-you page can hand the buyer a one-click "verify your receipt" URL)
+(function fromHash(){
+  const h = location.hash.slice(1); if(!h) return;
+  try{
+    const b64 = h.replace(/-/g,'+').replace(/_/g,'/');
+    const json = decodeURIComponent(escape(atob(b64)));
+    document.getElementById('in').value = json;
+    run();
+  }catch{ /* ignore a malformed hash */ }
+})();
+</script>
+</body>
+</html>

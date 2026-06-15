@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 bash scripts/build-widget.sh
 
-FILES="widget/xmr-pay.js src/core.js src/verify.js src/watch.js src/scanner.js src/agent.js src/config.js src/webhook.js"
+FILES="widget/xmr-pay.js src/core.js src/verify.js src/watch.js src/scanner.js src/agent.js src/config.js src/receipt.js src/webhook.js"
 shasum -a 256 $FILES > SHA256SUMS
 echo "--- SHA256SUMS ---"; cat SHA256SUMS; echo
 
