@@ -48,6 +48,17 @@ function saveOrders(store) {
     try { fs.writeFileSync(ORDERS_FILE, JSON.stringify([...store.values()])); }
     catch (e) { console.error(`[orders] save failed: ${e.message}`); }
 }
+// COALESCED save for routine updates: the poller calls onUpdate once per pending
+// order per tick, so writing the whole ledger each time is O(N) blocking writes
+// per poll. debounce to at most one write per second. (createOrder / onPaid /
+// shutdown still save immediately — those are the transitions worth flushing.)
+let _saveDirty = false, _saveTimer = null;
+function queueSave(store) {
+    _saveDirty = true;
+    if (_saveTimer) return;
+    _saveTimer = setTimeout(() => { _saveTimer = null; if (_saveDirty) { _saveDirty = false; saveOrders(store); } }, 1000);
+    if (_saveTimer.unref) _saveTimer.unref();
+}
 
 function send(res, code, body) {
     res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -107,7 +118,7 @@ function send(res, code, body) {
         // wallet sync holds the lock (set 0 to create one per order on demand).
         subaddressPool: intEnv('XMR_SUBADDRESS_POOL', 8),
         poolLabel: 'order',
-        onUpdate: () => saveOrders(store),
+        onUpdate: () => queueSave(store),   // coalesced — see queueSave (avoids O(N) writes/tick)
         onPaid: async (order) => {
             saveOrders(store);
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
