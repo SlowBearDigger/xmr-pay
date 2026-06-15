@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": { "command": "npm run test:mut" },
+  "mutate": ["src/watch.js", "src/core.js"],
+  "reporters": ["clear-text", "html"],
+  "coverageAnalysis": "off",
+  "concurrency": 4,
+  "timeoutMS": 30000,
+  "thresholds": { "high": 90, "low": 75, "break": 0 }
+}

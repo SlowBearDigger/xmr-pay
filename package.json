@@ -62,7 +62,8 @@
   "scripts": {
     "build": "bash scripts/build-widget.sh",
     "release": "bash scripts/release.sh",
-    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/receipt.test.js && node test/agent-cli.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/config-pin.test.js && node test/scanner-birthday.test.js && node test/reorg.test.js && node test/property.test.js && node test/stress.test.js",
+    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/receipt.test.js && node test/agent-cli.test.js && node test/watch.test.js && node test/webhook.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/config-pin.test.js && node test/scanner-birthday.test.js && node test/reorg.test.js && node test/property.test.js && node test/rpc-fuzz.test.js && node test/stress.test.js",
+    "test:mut": "node test/core.test.js && node test/watch.test.js && node test/property.test.js && node test/agent.test.js && node test/reorg.test.js && node test/scanner-birthday.test.js && node test/verify-gates.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/rpc-fuzz.test.js",
     "test:live": "node test/live-stagenet.js",
     "test:scanner": "node test/live-scanner.js",
     "test:fastsync": "node test/scanner-fastsync.js",
@@ -72,6 +73,7 @@
     "demo": "node examples/demo-server.js"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
     "fast-check": "^4.8.0"
   }
 }
