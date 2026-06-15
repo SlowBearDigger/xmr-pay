@@ -11,15 +11,19 @@
 // API (bind to localhost; your shop's backend calls it):
 //   POST /order   {amount, id?}   → {id, address, amount, status, birthdayHeight}
 //   GET  /order/:id               → {paid, status, receivedXmr, shortfallXmr, …}
+//   GET  /receipt/:id             → signed receipt envelope (once the order is paid)
 //   GET  /healthz                 → {ok, network, node, viewOnly, orders}
 //
 // needs monero-ts installed (the only non-core dependency, optional peer).
 
 const http = require('http');
 const fs = require('fs');
+const crypto = require('crypto');
 const { createScanner } = require('../src/scanner');
 const { createPaymentAgent } = require('../src/agent');
 const { sendWebhook } = require('../src/webhook');
+const { receiptFromOrder, signReceipt } = require('../src/receipt');
+const { generateSigningKey, configFingerprint } = require('../src/config');
 
 const env = process.env;
 const NODES = (env.XMR_NODES || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -78,6 +82,21 @@ function send(res, code, body) {
     let idc = 0; for (const id of store.keys()) { const m = /(\d+)$/.exec(id); if (m && +m[1] > idc) idc = +m[1]; }
     console.log(`orders: ${store.size} reloaded from ${ORDERS_FILE}`);
 
+    // merchant signing key for RECEIPTS. it persists so the fingerprint a buyer
+    // pins stays stable across restarts; generated once if absent. it is NOT a
+    // Monero key — it only signs receipts, so losing it costs nothing but new
+    // receipts (old ones still verify against their embedded pubkey).
+    const RECEIPT_KEY_FILE = env.XMR_RECEIPT_KEY || 'receipt-key.pem';
+    let receiptKey = null, receiptFp = null;
+    try {
+        let pem;
+        if (fs.existsSync(RECEIPT_KEY_FILE)) { pem = fs.readFileSync(RECEIPT_KEY_FILE, 'utf8'); }
+        else { pem = generateSigningKey().privateKey; fs.writeFileSync(RECEIPT_KEY_FILE, pem, { mode: 0o600 }); console.log(`[receipt] generated a new signing key → ${RECEIPT_KEY_FILE}`); }
+        receiptKey = pem;
+        receiptFp = configFingerprint(crypto.createPublicKey(pem).export({ type: 'spki', format: 'pem' }));
+        console.log(`[receipt] signing fingerprint ${receiptFp}  — publish this so buyers can pin it`);
+    } catch (e) { console.warn(`[receipt] disabled — could not load/create a signing key: ${e.message}`); }
+
     const agent = createPaymentAgent({
         scanner,
         store,
@@ -92,6 +111,32 @@ function send(res, code, body) {
         onPaid: async (order) => {
             saveOrders(store);
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
+
+            // mint + sign the receipt. the merchant signature is the offline leg;
+            // the InProofs are the trustless on-chain leg (best-effort — a failure
+            // never blocks the order, the signed receipt still stands on its own).
+            if (receiptKey) {
+                try {
+                    const txProofs = [];
+                    if (env.XMR_RECEIPT_TXPROOF !== '0') {
+                        for (const txid of order.txids) {
+                            try { txProofs.push(await scanner.txProof(txid, order.index)); }
+                            catch (e) { console.warn(`[receipt] tx_proof ${txid} failed: ${e.message}`); }
+                        }
+                    }
+                    const merchant = { fingerprint: receiptFp };
+                    if (env.XMR_MERCHANT_NAME) merchant.name = env.XMR_MERCHANT_NAME;
+                    const signed = signReceipt(receiptFromOrder(order, {
+                        merchant, network: env.XMR_NETWORK || 'mainnet', paidAt: Date.now(), txProofs,
+                    }), receiptKey);
+                    order.receipt = signed;                 // for the webhook payload (onPaid gets a snapshot)
+                    const live = store.get(order.id);        // ALSO persist on the live order so GET /receipt/:id + a reload find it
+                    if (live) live.receipt = signed;
+                    saveOrders(store);
+                    console.log(`[receipt] ${order.id} signed${txProofs.length ? ` + ${txProofs.length} tx_proof(s)` : ''}`);
+                } catch (e) { console.error(`[receipt] ${order.id} mint failed: ${e.message}`); }
+            }
+
             if (env.FULFILL_WEBHOOK_URL) {
                 try {
                     await sendWebhook(env.FULFILL_WEBHOOK_URL,
@@ -104,6 +149,7 @@ function send(res, code, body) {
                             txids: order.txids,
                             confirmations: order.confirmations,
                             network: env.XMR_NETWORK || 'mainnet',
+                            receipt: order.receipt,             // signed receipt envelope (if minted) — the store stores it for the buyer
                         },
                         { secret: env.FULFILL_WEBHOOK_SECRET });
                 } catch (e) { console.error(`[webhook] ${order.id} failed: ${e.message}`); }
@@ -133,7 +179,7 @@ function send(res, code, body) {
         const url = req.url.split('?')[0];
         try {
             if (req.method === 'GET' && url === '/healthz') {
-                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady() });
+                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady(), receipt: receiptFp || null });
             }
             if (req.method === 'POST' && url === '/order') {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
@@ -158,11 +204,39 @@ function send(res, code, body) {
                 if (!r) return send(res, 404, { error: 'unknown order' });
                 return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: await tipHeight(), txids: r.txids });
             }
+            // the signed receipt for a paid order. token-gated like /order/:id so
+            // receipts are not enumerable on the open agent — the buyer fetches
+            // theirs through the store (which checks they own the order), and the
+            // receipt itself is shareable + verifiable by anyone once they have it.
+            const rm = url.match(/^\/receipt\/([^/]+)$/);
+            if (req.method === 'GET' && rm) {
+                if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
+                const r = agent.get(decodeURIComponent(rm[1]));
+                if (!r) return send(res, 404, { error: 'unknown order' });
+                if (!r.receipt) return send(res, 409, { error: r.paid ? 'receipt not ready' : 'order not paid yet', status: r.status });
+                return send(res, 200, r.receipt);
+            }
             send(res, 404, { error: 'not found' });
         } catch (e) { send(res, 500, { error: 'agent error' }); }
     });
-    server.listen(PORT, BIND, () => console.log(`payment agent on http://${BIND}:${PORT}  (POST /order · GET /order/:id · GET /healthz)`));
+    server.listen(PORT, BIND, () => console.log(`payment agent on http://${BIND}:${PORT}  (POST /order · GET /order/:id · GET /receipt/:id · GET /healthz)`));
 
     const _persist = setInterval(() => saveOrders(store), 30000); if (_persist.unref) _persist.unref();
-    process.on('SIGINT', () => { agent.stop(); saveOrders(store); scanner.close(false).finally(() => process.exit(0)); });
+    // persist the WALLET cache too (subaddress indices + scan progress). without
+    // this, a restart re-creates subaddresses from index 1 — reusing a still-
+    // pending order's address — and rescans from the restore height every time.
+    const _persistWallet = setInterval(() => { scanner.save().catch(() => {}); }, 120000); if (_persistWallet.unref) _persistWallet.unref();
+    setTimeout(() => { scanner.save().catch(() => {}); }, 8000);   // capture the pre-warmed pool early
+
+    // graceful shutdown. systemd sends SIGTERM on `systemctl restart/stop` (NOT
+    // SIGINT), so we MUST handle it — otherwise the wallet never saves and the
+    // next boot reuses subaddress indices. close(true) writes the wallet cache.
+    let _down = false;
+    const shutdown = () => {
+        if (_down) return; _down = true;
+        agent.stop(); saveOrders(store);
+        scanner.close(true).finally(() => process.exit(0));
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
 })().catch(e => { console.error('agent boot error:', e); process.exit(2); });

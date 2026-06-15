@@ -139,6 +139,15 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
             const rows = creditableRows(transfers.map(toRow), minHeight);
             return summarizeTransfers(rows, xmrToPico(amount), minConfirmations);
         },
+        // generate an InProof for a received tx. recipient-side, so the view key
+        // is enough — it proves to ANYONE that this subaddress received this tx,
+        // the trustless on-chain leg of a receipt. callers treat a throw as "no
+        // on-chain proof available" and fall back to the merchant signature.
+        async txProof(txid, subaddressIndex, message = '') {
+            const address = await wallet.getAddress(accountIndex, subaddressIndex);
+            const signature = await wallet.getTxProof(String(txid).trim().toLowerCase(), address, message);
+            return { txid: String(txid).trim().toLowerCase(), address, message, signature };
+        },
         async sync() { await doSync(); },
         async height() { return Number(await wallet.getHeight()); },
         async daemonHeight() { return Number(await wallet.getDaemonHeight()); },
