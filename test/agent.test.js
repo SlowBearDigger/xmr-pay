@@ -18,8 +18,9 @@ function mockScanner() {
     const self = {
         rowsByIndex,
         syncs: 0,
+        newSubCalls: 0,
         async sync() { self.syncs++; },
-        async newSubaddress(label) { const i = ++idx; return { address: `sub_${i}`, index: i, atHeight: 1000 + i }; },
+        async newSubaddress(label) { self.newSubCalls++; const i = ++idx; return { address: `sub_${i}`, index: i, atHeight: 1000 + i }; },
         async addressAt(i) { return `sub_${i}`; },
         async checkOrder({ subaddressIndex, amount, minConfirmations = 1 }) {
             return summarizeTransfers(rowsByIndex.get(subaddressIndex) || [], xmrToPico(amount), minConfirmations);
@@ -81,6 +82,35 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('check on an unknown order → null', (await agent.check('nope')) === null);
 
     agent.stop();
+
+    // --- subaddress pool: pre-warm + instant handout + background refill ---
+    const ms2 = mockScanner();
+    const a2 = createPaymentAgent({ scanner: ms2, minConfirmations: 1, subaddressPool: 4, poolLabel: 'order', pollMs: 999999 });
+    a2.start();                                       // pre-warms the pool
+    await new Promise(r => setTimeout(r, 25));         // let fillPool resolve
+    ok('pool pre-warms to N on start', a2.poolReady() === 4, `pool=${a2.poolReady()}`);
+    ok('pool pre-created exactly N subaddresses upfront', ms2.newSubCalls === 4, `calls=${ms2.newSubCalls}`);
+
+    const p1 = await a2.createOrder({ id: 'p1', amount: '0.1' });
+    ok('createOrder hands out a POOLED subaddress (no live create)', p1.index === 1 && ms2.newSubCalls === 4, `idx=${p1.index} calls=${ms2.newSubCalls}`);
+    ok('pooled order keeps its birthday height', p1.birthdayHeight === 1001);
+    ok('pool shrank by one', a2.poolReady() === 3);
+
+    // drain below the floor (2) → triggers a background top-up
+    await a2.createOrder({ id: 'p2', amount: '0.1' });   // pool 3→2
+    await a2.createOrder({ id: 'p3', amount: '0.1' });   // pool 2→1 (<floor) → refill
+    await new Promise(r => setTimeout(r, 25));
+    ok('pool refills in the background after dropping below floor', a2.poolReady() === 4, `pool=${a2.poolReady()}`);
+    ok('refill created more subaddresses', ms2.newSubCalls === 7, `calls=${ms2.newSubCalls}`);
+    a2.stop();
+
+    // --- no pool (default): one subaddress created per order, on demand ---
+    const ms3 = mockScanner();
+    const a3 = createPaymentAgent({ scanner: ms3, minConfirmations: 1 });
+    await a3.createOrder({ id: 'n1', amount: '0.1' });
+    ok('without a pool, createOrder creates one subaddress on demand', ms3.newSubCalls === 1 && a3.poolReady() === 0);
+    a3.stop();
+
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
 })().catch(e => { console.error('agent test error:', e); process.exit(2); });

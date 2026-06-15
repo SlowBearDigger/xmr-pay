@@ -9,13 +9,29 @@
 //   const r = await agent.check('ord_42');   // {paid, status, receivedXmr, shortfallXmr, ...}
 //   agent.start();   // background poller transitions orders to paid + calls onPaid once
 
-function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, idgen } = {}) {
+function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, idgen, subaddressPool = 0, poolLabel = '' } = {}) {
     if (!scanner || typeof scanner.checkOrder !== 'function' || typeof scanner.newSubaddress !== 'function') {
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
     const orders = store || new Map();
     let counter = 0;
     const nextId = idgen || (() => `ord_${(++counter).toString(36)}`);
+
+    // OPTIONAL pre-warmed subaddress pool. createSubaddress() is slow while a
+    // wallet sync holds the lock, so an order created mid-sync can stall for
+    // seconds. pre-creating subaddresses (before the poller starts, and topping
+    // up in the background) makes createOrder instant. each entry keeps its
+    // birthday height, so the order/birthday binding is preserved.
+    const pool = [];
+    let filling = false;
+    const poolFloor = Math.max(2, Math.ceil(subaddressPool / 4));
+    async function fillPool(n) {
+        if (filling || n <= 0) return;
+        filling = true;
+        try { for (let i = 0; i < n; i++) { const s = await scanner.newSubaddress(poolLabel); pool.push({ address: s.address, index: s.index, atHeight: s.atHeight }); } }
+        catch { /* node busy — top up on the next createOrder/tick */ }
+        finally { filling = false; }
+    }
 
     // create an order: derive a fresh per-order subaddress (or bind a given index),
     // record the amount + birthday height. hand `address` to the buyer.
@@ -27,6 +43,10 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         if (index != null) {
             idx = index;
             address = await scanner.addressAt(index);
+        } else if (pool.length) {
+            const s = pool.shift();
+            address = s.address; idx = s.index; birthdayHeight = s.atHeight;
+            if (subaddressPool && pool.length < poolFloor) fillPool(subaddressPool - pool.length);   // top up in the background
         } else {
             const sub = await scanner.newSubaddress(label || oid);
             address = sub.address; idx = sub.index; birthdayHeight = sub.atHeight;
@@ -50,6 +70,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         order.pendingXmr = r.pendingXmr;
         order.lockedXmr = r.lockedXmr;
         order.shortfallXmr = r.shortfallXmr;
+        order.confirmations = r.confirmations;
         order.txids = r.txids;
         const result = { ...order };
         if (r.paid && !wasPaid) {
@@ -74,6 +95,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
     function start() {
         if (running) return;
         running = true;
+        if (subaddressPool > 0) fillPool(subaddressPool);   // pre-warm BEFORE the first sync holds the wallet lock
         const loop = async () => {
             if (!running) return;
             await tick();
@@ -89,6 +111,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         tick,
         get: (id) => { const o = orders.get(id); return o ? { ...o } : null; },
         list: () => [...orders.values()].map(o => ({ ...o })),
+        poolReady: () => pool.length,
         start,
         stop,
     };
