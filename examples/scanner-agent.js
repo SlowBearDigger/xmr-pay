@@ -180,18 +180,26 @@ function send(res, code, body) {
     const MIN_CONF = intEnv('XMR_MIN_CONFIRMATIONS', 1);
     // cached chain tip so a busy status endpoint doesn't hammer the node — gives
     // the UI a REAL, live block height to show ("scanning the blockchain").
-    let _tip = { h: 0, at: 0 };
+    let _tip = { h: 0, at: 0 }, _tipInflight = null;
     async function tipHeight() {
         const now = Date.now();
         if (_tip.h && now - _tip.at < 5000) return _tip.h;
+        // DEDUP the fetch: under a burst of concurrent status polls on a cold/stale
+        // cache, every request would otherwise fire its own /get_height — a
+        // thundering herd against the node. share one in-flight fetch instead.
+        if (_tipInflight) return _tipInflight;
         // fetch STRAIGHT from the node, not via the wallet — a status read must
         // never block behind an in-progress wallet sync.
-        try {
-            const r = await fetch(String(scanner.node).replace(/\/+$/, '') + '/get_height', { signal: AbortSignal.timeout(4000) });
-            const j = await r.json(); const h = Number(j && j.height);
-            if (Number.isFinite(h) && h > 0) { _tip.h = h; _tip.at = now; }
-        } catch { /* keep last */ }
-        return _tip.h || null;
+        _tipInflight = (async () => {
+            try {
+                const r = await fetch(String(scanner.node).replace(/\/+$/, '') + '/get_height', { signal: AbortSignal.timeout(4000) });
+                const j = await r.json(); const h = Number(j && j.height);
+                if (Number.isFinite(h) && h > 0) { _tip.h = h; _tip.at = Date.now(); }
+            } catch { /* keep last */ }
+            finally { _tipInflight = null; }
+            return _tip.h || null;
+        })();
+        return _tipInflight;
     }
 
     const server = http.createServer(async (req, res) => {
