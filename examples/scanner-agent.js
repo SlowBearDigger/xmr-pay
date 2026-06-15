@@ -59,6 +59,10 @@ function send(res, code, body) {
         scanner,
         minConfirmations: intEnv('XMR_MIN_CONFIRMATIONS', 1),
         pollMs: intEnv('POLL_MS', 15000),
+        // pre-warm a pool of subaddresses so POST /order is instant even while a
+        // wallet sync holds the lock (set 0 to create one per order on demand).
+        subaddressPool: intEnv('XMR_SUBADDRESS_POOL', 8),
+        poolLabel: 'order',
         onPaid: async (order) => {
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
             if (env.FULFILL_WEBHOOK_URL) {
@@ -88,7 +92,13 @@ function send(res, code, body) {
     async function tipHeight() {
         const now = Date.now();
         if (_tip.h && now - _tip.at < 5000) return _tip.h;
-        try { _tip.h = await scanner.daemonHeight(); _tip.at = now; } catch { /* keep last */ }
+        // fetch STRAIGHT from the node, not via the wallet — a status read must
+        // never block behind an in-progress wallet sync.
+        try {
+            const r = await fetch(String(scanner.node).replace(/\/+$/, '') + '/get_height', { signal: AbortSignal.timeout(4000) });
+            const j = await r.json(); const h = Number(j && j.height);
+            if (Number.isFinite(h) && h > 0) { _tip.h = h; _tip.at = now; }
+        } catch { /* keep last */ }
         return _tip.h || null;
     }
 
@@ -96,7 +106,7 @@ function send(res, code, body) {
         const url = req.url.split('?')[0];
         try {
             if (req.method === 'GET' && url === '/healthz') {
-                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length });
+                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady() });
             }
             if (req.method === 'POST' && url === '/order') {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
@@ -114,7 +124,9 @@ function send(res, code, body) {
             const m = url.match(/^\/order\/([^/]+)$/);
             if (req.method === 'GET' && m) {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
-                const r = await agent.check(decodeURIComponent(m[1]));
+                // read the CACHED state — the background poller keeps every order
+                // fresh, so a status poll never triggers a per-request wallet sync.
+                const r = agent.get(decodeURIComponent(m[1]));
                 if (!r) return send(res, 404, { error: 'unknown order' });
                 return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: await tipHeight(), txids: r.txids });
             }
