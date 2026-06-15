@@ -117,6 +117,7 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `XMR_WALLET_PATH` | | in-memory | persist the wallet so restarts skip re-scanning |
 | `XMR_MIN_CONFIRMATIONS` | | `1` | raise for high-value orders (reorg safety) |
 | `XMR_EXPIRY_HOURS` | | `0` | drop unpaid orders after N hours (bounds per-tick work + memory; `0` = never). A late payment still lands on-chain — it just won't auto-complete. |
+| `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order|/receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
 | `POLL_MS` | | `15000` | how often the poller re-checks pending orders |
 | `FULFILL_WEBHOOK_URL` / `_SECRET` | | — | where + how to sign the `order.paid` webhook |
 | `AGENT_TOKEN` | | — | optional `Bearer` token required on `POST /order` |

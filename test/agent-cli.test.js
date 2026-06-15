@@ -9,7 +9,7 @@ const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`
 const cfg = {
     network: 'stagenet', address: '5addr', viewKey: 'a'.repeat(64), nodes: 'http://n1,http://n2',
     restoreHeight: 2141750, merchantName: 'Sat Coffee', webhookUrl: 'https://shop/wh',
-    webhookSecret: 'whsec_x', token: 'deadbeef', port: 8790, minConfirmations: 1, pool: 8, expiryHours: 24,
+    webhookSecret: 'whsec_x', token: 'deadbeef', port: 8790, minConfirmations: 1, pool: 8, expiryHours: 24, paidRetentionHours: 168,
 };
 const e = {};
 applyConfig(cfg, '/data/xmr', e);
@@ -22,6 +22,7 @@ ok('wallet/orders/receipt paths under the data dir', e.XMR_WALLET_PATH === '/dat
 ok('merchant + webhook + token mapped', e.XMR_MERCHANT_NAME === 'Sat Coffee' && e.FULFILL_WEBHOOK_URL === 'https://shop/wh' && e.FULFILL_WEBHOOK_SECRET === 'whsec_x' && e.AGENT_TOKEN === 'deadbeef');
 ok('port + conf + pool stringified', e.PORT === '8790' && e.XMR_MIN_CONFIRMATIONS === '1' && e.XMR_SUBADDRESS_POOL === '8');
 ok('expiryHours mapped to XMR_EXPIRY_HOURS', e.XMR_EXPIRY_HOURS === '24');
+ok('paidRetentionHours mapped to XMR_PAID_RETENTION_HOURS', e.XMR_PAID_RETENTION_HOURS === '168');
 
 // no webhook → no webhook env vars (don't leak empty values)
 const e2 = {};

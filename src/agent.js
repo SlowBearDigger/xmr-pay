@@ -9,7 +9,7 @@
 //   const r = await agent.check('ord_42');   // {paid, status, receivedXmr, shortfallXmr, ...}
 //   agent.start();   // background poller transitions orders to paid + calls onPaid once
 
-function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, now = Date.now } = {}) {
+function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, paidRetentionMs = 0, now = Date.now } = {}) {
     if (!scanner || typeof scanner.checkOrder !== 'function' || typeof scanner.newSubaddress !== 'function') {
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
@@ -81,6 +81,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         order.shortfallXmr = r.shortfallXmr;
         order.confirmations = r.confirmations;
         order.txids = r.txids;
+        if (r.paid && !wasPaid) order.paidAt = now();   // stamp settlement (for the retention sweep)
         const result = { ...order };
         if (r.paid && !wasPaid) {
             if (onPaid) { try { await onPaid(result); } catch (e) { /* webhook retries are the caller's job */ } }
@@ -94,7 +95,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         if (typeof scanner.sync === 'function') {
             try { await scanner.sync(); } catch { return; }   // node down — skip this tick, keep state
         }
-        const nowMs = expiryMs > 0 ? now() : 0;
+        const nowMs = (expiryMs > 0 || paidRetentionMs > 0) ? now() : 0;
         for (const order of orders.values()) {
             // LATCH: a settled order is never re-checked. minConfirmations is the
             // reorg defence — an order only settles once its payment is that deep,
@@ -103,7 +104,17 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
             // than minConfirmations after settlement is the merchant's accepted
             // risk, bounded by minConfirmations — we don't un-capture a sale. set
             // minConfirmations to your value-at-risk. (see docs/AGENT.md → reorgs)
-            if (order.paid) continue;
+            if (order.paid) {
+                // RETENTION: a settled order's work is done (onPaid already fired,
+                // the store/webhook holds the record). keeping it forever leaks
+                // memory + bloats every ledger save. drop it once it's older than
+                // paidRetentionMs. 0 = keep forever (default). GET /order|/receipt
+                // 404s after this, so set it well past your buyers' poll window.
+                if (paidRetentionMs > 0 && order.paidAt != null && (nowMs - order.paidAt) >= paidRetentionMs) {
+                    orders.delete(order.id);
+                }
+                continue;
+            }
             // EXPIRY: drop a still-unpaid order once it's older than expiryMs. this
             // bounds both the per-tick work and memory — without it, abandoned
             // orders accumulate forever and every poll checks all of them. a late
