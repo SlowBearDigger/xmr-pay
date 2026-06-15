@@ -95,7 +95,14 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
             try { await scanner.sync(); } catch { return; }   // node down — skip this tick, keep state
         }
         for (const order of orders.values()) {
-            if (order.paid) continue;          // settled — nothing more to do
+            // LATCH: a settled order is never re-checked. minConfirmations is the
+            // reorg defence — an order only settles once its payment is that deep,
+            // so a reorg shallower than minConfirmations can't falsely complete it
+            // (the pre-settlement path re-evaluates every tick). a reorg DEEPER
+            // than minConfirmations after settlement is the merchant's accepted
+            // risk, bounded by minConfirmations — we don't un-capture a sale. set
+            // minConfirmations to your value-at-risk. (see docs/AGENT.md → reorgs)
+            if (order.paid) continue;
             try { await check(order.id, { sync: false }); } catch { /* transient; keep polling */ }
         }
     }
