@@ -8,7 +8,7 @@
     "start": "npm run build && node server.js"
   },
   "dependencies": {
-    "xmr-pay": "^0.1.7",
+    "xmr-pay": "^0.3.0",
     "monero-ts": "^0.11.0"
   },
   "comment:overrides": "monero-ts pins old transitive deps with CVEs (serialize-javascript ^3.1.0 = High RCE GHSA-5c6j-r48x-rmvq; uuid 3.3.2 = moderate buffer GHSA-w5hq-g745-h8pq). These force-patch them in this deployment. serialize-javascript API is stable across majors; uuid major bump validated against a real on-chain verify. xmr-pay core (links/QR/widget) does not need monero-ts and has no CVEs.",
