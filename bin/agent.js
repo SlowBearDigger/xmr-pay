@@ -97,6 +97,7 @@ async function wizard() {
         webhookSecret: webhookUrl ? 'whsec_' + crypto.randomBytes(16).toString('hex') : undefined,
         token: crypto.randomBytes(16).toString('hex'),
         port: Number(port), minConfirmations: 1, pool: 8,
+        expiryHours: 24,   // drop unpaid orders after a day (bounds work + memory; 0 = never)
     };
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2), { mode: 0o600 });
@@ -153,6 +154,7 @@ function applyConfig(cfg, dataDir = DATA_DIR, e = process.env) {
     e.PORT = String(cfg.port || 8788);
     e.XMR_MIN_CONFIRMATIONS = String(cfg.minConfirmations || 1);
     e.XMR_SUBADDRESS_POOL = String(cfg.pool || 8);
+    if (cfg.expiryHours != null) e.XMR_EXPIRY_HOURS = String(cfg.expiryHours);
     return e;
 }
 

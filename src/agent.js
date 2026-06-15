@@ -9,7 +9,7 @@
 //   const r = await agent.check('ord_42');   // {paid, status, receivedXmr, shortfallXmr, ...}
 //   agent.start();   // background poller transitions orders to paid + calls onPaid once
 
-function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, idgen, subaddressPool = 0, poolLabel = '' } = {}) {
+function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, now = Date.now } = {}) {
     if (!scanner || typeof scanner.checkOrder !== 'function' || typeof scanner.newSubaddress !== 'function') {
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
@@ -57,7 +57,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                 const sub = await scanner.newSubaddress(label || oid);
                 address = sub.address; idx = sub.index; birthdayHeight = sub.atHeight;
             }
-            const order = { id: oid, amount: String(amount), address, index: idx, birthdayHeight, status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: String(amount), txids: [] };
+            const order = { id: oid, amount: String(amount), address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: String(amount), txids: [] };
             orders.set(oid, order);
             return { ...order };
         } finally {
@@ -94,6 +94,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         if (typeof scanner.sync === 'function') {
             try { await scanner.sync(); } catch { return; }   // node down — skip this tick, keep state
         }
+        const nowMs = expiryMs > 0 ? now() : 0;
         for (const order of orders.values()) {
             // LATCH: a settled order is never re-checked. minConfirmations is the
             // reorg defence — an order only settles once its payment is that deep,
@@ -103,6 +104,17 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
             // risk, bounded by minConfirmations — we don't un-capture a sale. set
             // minConfirmations to your value-at-risk. (see docs/AGENT.md → reorgs)
             if (order.paid) continue;
+            // EXPIRY: drop a still-unpaid order once it's older than expiryMs. this
+            // bounds both the per-tick work and memory — without it, abandoned
+            // orders accumulate forever and every poll checks all of them. a late
+            // payment to an expired order still lands on-chain in YOUR wallet; it
+            // just won't auto-complete (reconcile via onExpire). off by default.
+            if (expiryMs > 0 && order.createdAt != null && (nowMs - order.createdAt) >= expiryMs) {
+                order.status = 'expired';
+                orders.delete(order.id);                                  // safe to delete the current entry mid-iteration
+                if (onExpire) { try { await onExpire({ ...order }); } catch { /* caller's job */ } }
+                continue;
+            }
             try { await check(order.id, { sync: false }); } catch { /* transient; keep polling */ }
         }
     }

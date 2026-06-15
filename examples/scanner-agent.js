@@ -119,6 +119,11 @@ function send(res, code, body) {
         subaddressPool: intEnv('XMR_SUBADDRESS_POOL', 8),
         poolLabel: 'order',
         onUpdate: () => queueSave(store),   // coalesced — see queueSave (avoids O(N) writes/tick)
+        // drop unpaid orders older than XMR_EXPIRY_HOURS (0 = never, default). bounds
+        // the per-tick work + memory; a late payment still lands on-chain in your
+        // wallet — it just won't auto-complete (reconcile from the [expired] log).
+        expiryMs: Math.max(0, (Number(env.XMR_EXPIRY_HOURS) || 0) * 3600000),
+        onExpire: (order) => { console.log(`[expired] ${order.id} · unpaid > ${env.XMR_EXPIRY_HOURS}h · dropped`); queueSave(store); },
         onPaid: async (order) => {
             saveOrders(store);
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
