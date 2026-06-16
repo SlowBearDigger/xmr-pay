@@ -33,9 +33,12 @@ Set env vars in the Vercel dashboard:
 
 | var | value |
 |-----|-------|
-| `XMR_ADDRESS` | your Monero address |
+| `XMR_ADDRESS` | your Monero address (proof mode reads `XMR_ADDRESS`; the watch agent uses `XMR_PRIMARY_ADDRESS`) |
 | `XMR_NODES` | comma-separated node URLs you trust (your own first) |
+| `XMR_QUORUM` | optional — how many nodes must agree before a payment counts (default `2`); set `1` for single-node trust |
 | `CORS_ORIGIN` | your site origin, e.g. `https://you.github.io` (or `*` for a public tip endpoint) |
+| `VERIFY_TOKEN` | optional — require this as a `Bearer` token on the verify endpoint (shared secret gate) |
+| `VERIFY_RL_MAX` | optional — max verify requests per IP per window (rate-limit cap) |
 | `FULFILL_WEBHOOK_URL` | optional — where to POST `order.paid` |
 | `FULFILL_WEBHOOK_SECRET` | optional — HMAC secret for that webhook |
 

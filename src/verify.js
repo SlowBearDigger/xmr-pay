@@ -451,4 +451,4 @@ async function verifyPayment(opts) {
     };
 }
 
-module.exports = { verifyPayment, fetchUnlockTime, xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, isTransientError };
+module.exports = { verifyPayment, fetchUnlockTime, minHeightAcross, xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, isTransientError };

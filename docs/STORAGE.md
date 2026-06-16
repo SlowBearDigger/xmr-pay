@@ -39,7 +39,7 @@ Each entry is a plain order object:
   "address": "75a4WYbe…",      // the per-order subaddress handed to the buyer
   "index": 1,                   // its subaddress index in the wallet
   "birthdayHeight": 2141578,    // only payments AT/AFTER this height count
-  "status": "pending",          // pending | mempool | unconfirmed | partial | paid | locked
+  "status": "pending",          // pending | partial | mempool | locked | paid
   "paid": false,
   "receivedXmr": 0,
   "shortfallXmr": "0.01",
@@ -66,7 +66,7 @@ got paid. Persist **both** for restart-safety (see Recovery below).
 
 ---
 
-## Restart recovery (what 0.2.x guarantees)
+## Restart recovery
 
 On agent restart:
 

@@ -84,6 +84,27 @@ const unlocked = { transfer: { unlock_time: 0 } };
     r = await withRpc(lockedRpc, () => verifyPaymentViaRpc({ ...base, skipUnlockTimeCheck: true }));
     ok('skipUnlockTimeCheck=true → the time-lock gate is bypassed → paid', r.paid && r.status === 'paid', r.reason);
 
+    // ---- elapsed unlock_time (wallet-rpc parity fix) ----
+    // a PAST unlock_time means the funds are spendable NOW — accept it, instead of
+    // stranding a legit payment as "locked" forever (the bug this fixes; the monero-ts
+    // transport already did this). a FUTURE unlock_time still stays locked.
+    // block-height form: wallet tip is past the unlock height → elapsed → paid.
+    r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: { transfer: { unlock_time: 100 } }, get_height: { height: 5000 } },
+        () => verifyPaymentViaRpc(base));
+    ok('block-height unlock_time already elapsed (tip past it) → paid', r.paid && r.status === 'paid', r.reason);
+    // block-height form: wallet tip is below the unlock height → still locked.
+    r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: { transfer: { unlock_time: 9000 } }, get_height: { height: 5000 } },
+        () => verifyPaymentViaRpc(base));
+    ok('block-height unlock_time in the future (tip below it) → locked', !r.paid && r.status === 'locked', r.reason);
+    // timestamp form (>= 5e8): a long-past unix timestamp → elapsed → paid.
+    r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: { transfer: { unlock_time: 1000000000 } } },
+        () => verifyPaymentViaRpc(base));   // 2001 — long past
+    ok('timestamp unlock_time in the past → paid', r.paid && r.status === 'paid', r.reason);
+    // timestamp form: a far-future unix timestamp → locked.
+    r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: { transfer: { unlock_time: 9999999999 } } },
+        () => verifyPaymentViaRpc(base));   // 2286 — far future
+    ok('timestamp unlock_time in the future → locked', !r.paid && r.status === 'locked', r.reason);
+
     // wallet has no record → fall back to daemon nodes for the unlock gate
     r = await withRpc({ check_tx_proof: good(), get_transfer_by_txid: 'error', daemonUnlock: 0 }, () => verifyPaymentViaRpc({ ...base, nodes: ['http://node:38081'] }));
     ok('no wallet record + daemon says unlocked → paid', r.paid && r.status === 'paid', r.reason);
