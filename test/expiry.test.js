@@ -64,6 +64,21 @@ const row = (pico, confs = 10) => ({ txid: 't' + pico + '_' + (++seq), amountPic
         ok('payment after expiry: order stays gone (funds on-chain, manual reconcile)', a.get('late') === null);
     }
 
+    // ── a PARTIALLY-PAID order is NEVER expired (never orphan the buyer's funds) ──
+    {
+        let clock = 0; const expired = []; const ms = mockScanner();
+        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, expiryMs: 1000, now: () => clock, onExpire: o => expired.push(o.id), pollMs: 1e9 });
+        const o = await a.createOrder({ id: 'partial', amount: '0.1' });
+        ms.rows.set(o.index, [row('50000000000')]);   // 0.05 of 0.1 — a partial payment
+        await a.check('partial');
+        ok('partial payment recorded (received > 0, not paid)', !a.get('partial').paid && Number(a.get('partial').receivedXmr) > 0);
+        clock = 99999; await a.tick();                 // far past expiry
+        ok('a PARTIALLY-PAID order is NEVER expired (funds never orphaned)', a.get('partial') !== null && expired.length === 0);
+        ms.rows.set(o.index, [row('50000000000'), row('50000000000')]);   // buyer tops up → total 0.1
+        await a.check('partial');
+        ok('a top-up after the expiry window still completes the kept order', a.get('partial').paid === true);
+    }
+
     // ── expiryMs=0 (default) → nothing ever expires (backward compatible) ──
     {
         let clock = 0; const ms = mockScanner();

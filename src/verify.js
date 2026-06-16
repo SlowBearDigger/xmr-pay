@@ -72,10 +72,13 @@ function picoToXmr(p) {
 // unlike picoToXmr (a float, fine for display) this never loses a piconero — use
 // it for any amount that must be exact, e.g. a top-up shortfall or a nonce.
 function picoToXmrString(pico) {
-    const s = pico.toString().padStart(13, '0');
+    // handle the sign separately — padStart on "-1" would wedge the minus INSIDE
+    // the digits ("00000000000-1") and produce a garbage amount string.
+    const neg = pico < 0n;
+    const s = (neg ? -pico : pico).toString().padStart(13, '0');
     const i = s.slice(0, -12);
     const f = s.slice(-12).replace(/0+$/, '');
-    return f ? `${i}.${f}` : i;
+    return (neg ? '-' : '') + (f ? `${i}.${f}` : i);
 }
 
 // parse an atomic-unit amount (piconero) coming from wallet-rpc or a daemon into
@@ -90,6 +93,11 @@ function atomicToPico(v) {
     if (typeof v === 'bigint') return v;
     if (typeof v === 'number') {
         if (!Number.isInteger(v)) throw new Error(`non-integer atomic amount: ${v}`);
+        // a JS number past 2^53 has ALREADY lost integer precision in transit
+        // (JSON), so BigInt(v) would mint a confidently-wrong amount. fail CLOSED:
+        // large atomic amounts must arrive as a string or BigInt (monero-ts hands
+        // us BigInt; a wallet-rpc client should read amounts as strings).
+        if (!Number.isSafeInteger(v)) throw new Error(`atomic amount ${v} exceeds JS safe-integer precision — pass it as a string or BigInt`);
         return BigInt(v);
     }
     const s = String(v).trim();
@@ -131,7 +139,9 @@ function classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { exp
         return { status: inTxPool ? 'mempool' : 'unconfirmed', reason: `${confirmations}/${minConfirmations} confirmations` };
     }
     const overpaid = receivedPico > expectedPico;
-    return { status: 'ok', overpaid, overpaidXmr: overpaid ? picoToXmr(receivedPico - expectedPico) : 0 };
+    // EXACT piconero string (not picoToXmr's float) — this is a refund amount the
+    // merchant may pay back; the 12th decimal must not drift. matches watch.js.
+    return { status: 'ok', overpaid, overpaidXmr: overpaid ? picoToXmrString(receivedPico - expectedPico) : '0' };
 }
 
 // one shared verifier wallet per (node, network) — random keys, no secrets.
@@ -195,15 +205,14 @@ async function checkOnNode({ nodeUri, networkType, txid, proofKind, proof, addre
             : await w.checkTxProof(txid, address, message, proof);
         return { nodeUri, ...readCheck(raw) };
     } catch (e) {
-        // a cached wallet whose node dropped would fail every call forever — evict
-        // so the next attempt rebuilds the connection. tag whether this looks like
-        // a transient node failure or a terminal bad-proof error so the caller can
-        // map it to node-error vs invalid (a malformed proof DOES throw here, e.g.
-        // "Wrong signature size" — it is not a node problem).
-        dropWallet(key);
+        // classify before deciding whether to evict: a malformed proof makes
+        // monero-ts throw ("Wrong signature size") — that is NOT a node problem,
+        // so evicting would only force a pointless WASM cold-start on the next
+        // request. only evict on transient node/network failures.
         if (e && e.transient === undefined) {
             try { e.transient = isTransientError(e); } catch { /* frozen error object */ }
         }
+        if (e.transient !== false) dropWallet(key);
         throw e;
     }
 }
@@ -236,6 +245,23 @@ async function unlockTimeFromNode(uri, txid) {
         if (decoded.unlock_time === undefined || decoded.unlock_time === null) return null;
         return BigInt(String(decoded.unlock_time));
     } catch { return null; }
+}
+
+// read the chain tip from ONE node (plain /get_height). null if unreadable.
+async function daemonHeightFromNode(uri) {
+    try {
+        const r = await fetch(String(uri).replace(/\/+$/, '') + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return null;
+        const j = await r.json();
+        const h = j && (j.height ?? j.count);
+        return (h == null) ? null : BigInt(String(h));
+    } catch { return null; }
+}
+// the MINIMUM tip across the queried nodes — conservative, so a single node that
+// OVERSTATES the height can never unlock a time-locked output early.
+async function minHeightAcross(nodes) {
+    const hs = (await Promise.all(nodes.map(daemonHeightFromNode))).filter(h => h !== null);
+    return hs.length ? hs.reduce((m, h) => (h < m ? h : m)) : null;
 }
 
 // the time-lock gate must honor the SAME node-quorum as the proof step — else a
@@ -360,7 +386,11 @@ async function verifyPayment(opts) {
     }
 
     const head = answers[0];
-    const agreed = answers.every(a => a.isGood === head.isGood && a.receivedPico === head.receivedPico);
+    // require `want` answers to agree, not ALL of them. this matches the
+    // documented semantics ("quorum N = N nodes must agree") and tolerates
+    // one bad/misconfigured node in a want+1 list without blocking payment.
+    const agreeing = answers.filter(a => a.isGood === head.isGood && a.receivedPico === head.receivedPico);
+    const agreed = agreeing.length >= want;
     if (!agreed) {
         return fail('node-disagreement',
             'nodes returned different results — verify against different nodes',
@@ -388,7 +418,21 @@ async function verifyPayment(opts) {
             return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — nodes did not return the tx or disagreed; not marking paid (add nodes or retry)', ...base };
         }
         if (unlockTime !== 0n) {
-            return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable, not accepted`, ...base };
+            // a FUTURE unlock_time is the freeze scam (unspendable). but an
+            // ALREADY-ELAPSED unlock_time means the funds are spendable now — accept
+            // it, matching watch mode (rejecting those threw away legit payments).
+            // Monero: unlock_time < 5e8 is a block height, else a unix timestamp.
+            let elapsed;
+            if (unlockTime >= 500000000n) {
+                elapsed = BigInt(Math.floor(Date.now() / 1000)) >= unlockTime;
+            } else {
+                const tip = await minHeightAcross(nodes);
+                // can't confirm the lock elapsed → treat as still locked (conservative).
+                elapsed = tip !== null && tip >= unlockTime;
+            }
+            if (!elapsed) {
+                return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable yet, not accepted`, ...base };
+            }
         }
     }
 

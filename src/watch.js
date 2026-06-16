@@ -38,14 +38,18 @@ async function rpc(url, method, params = {}, timeoutMs = 15000) {
 // SUMS confirmed transfers (a buyer who paid in two installments still completes),
 // holds back pool + time-locked outputs, and reports an EXACT piconero shortfall.
 // rows: [{ txid, amountPico (BigInt), confirmations, inPool, locked }]
-function summarizeTransfers(rows, expectedPico, minConfirmations = 1) {
+function summarizeTransfers(rows, expectedPico, minConfirmations = 1, tolerancePico = 0n) {
     let confirmedSum = 0n, pendingSum = 0n, lockedSum = 0n;
     let minConfs = Infinity;
     const txids = [];
     for (const t of rows) {
         txids.push(t.txid);
         if (t.locked) { lockedSum += t.amountPico; continue; }
-        if (!t.inPool && t.confirmations >= minConfirmations) {
+        // double_spend_seen: the daemon saw a conflicting spend of these inputs —
+        // contested money. hold it as pending (never credit) until the flag clears
+        // (it does once the tx is firmly in the chain). protects a low-minConf
+        // merchant from a reorg-double-spend that a plain confirmation count misses.
+        if (!t.inPool && !t.doubleSpendSeen && t.confirmations >= minConfirmations) {
             confirmedSum += t.amountPico;
             minConfs = Math.min(minConfs, t.confirmations);
         } else {
@@ -57,19 +61,39 @@ function summarizeTransfers(rows, expectedPico, minConfirmations = 1) {
     // this so a top-up prompt never tells the buyer to re-send money that is
     // already here: locked funds just need to mature, there's nothing more to pay.
     const seenPico = confirmedSum + pendingSum + lockedSum;
+    // accepted-shortfall tolerance: a buyer who lands within `tolerancePico` of the
+    // price still completes (absorbs dust / fee / rounding so they aren't stuck
+    // "underpaid"). default 0 = exact. NEVER let tolerance reach/exceed the price —
+    // that would mark an order paid on (next to) nothing.
+    const threshold = (tolerancePico > 0n && tolerancePico < expectedPico) ? expectedPico - tolerancePico : expectedPico;
     const base = {
         receivedXmr: picoToXmr(confirmedSum),
+        receivedPico: confirmedSum.toString(), // exact string so callers avoid a float round-trip
         pendingXmr: picoToXmr(pendingSum),
         lockedXmr: picoToXmr(lockedSum),
         requiredXmr: picoToXmr(expectedPico),
-        // exact; counts money already seen (incl. locked) so a top-up never overpays
-        shortfallXmr: picoToXmrString(seenPico < expectedPico ? expectedPico - seenPico : 0n),
+        // exact; measured against the (tolerance-adjusted) threshold so a "paid"
+        // order never shows a leftover shortfall, and counts money already seen.
+        shortfallXmr: picoToXmrString(seenPico < threshold ? threshold - seenPico : 0n),
         confirmations: minConfs === Infinity ? 0 : minConfs,
         txids,
     };
-    if (confirmedSum >= expectedPico) return { paid: true, status: 'paid', reason: 'received on-chain', ...base };
-    if (lockedSum + confirmedSum >= expectedPico) return { paid: false, status: 'locked', reason: 'enough arrived but some outputs are time-locked', ...base };
-    if (confirmedSum + pendingSum >= expectedPico) return { paid: false, status: 'mempool', reason: 'enough seen, waiting for confirmations', ...base };
+    // defense in depth: an expected amount of 0 (or negative) must NEVER summarize
+    // as paid — `0 >= 0` would mark an order paid with nothing received. callers
+    // (createOrder) reject this upstream; this is the last line.
+    if (expectedPico <= 0n) return { paid: false, status: 'invalid', reason: 'expected amount must be greater than 0', ...base };
+    if (confirmedSum >= threshold) {
+        // overpaid is measured against the FULL price (not the tolerant threshold):
+        // report the exact excess so the merchant can refund + the buyer be told.
+        const overpaid = confirmedSum > expectedPico;
+        return {
+            paid: true, status: 'paid', reason: 'received on-chain',
+            overpaid, overpaidXmr: overpaid ? picoToXmrString(confirmedSum - expectedPico) : '0',
+            ...base,
+        };
+    }
+    if (lockedSum + confirmedSum >= threshold) return { paid: false, status: 'locked', reason: 'enough arrived but some outputs are time-locked', ...base };
+    if (confirmedSum + pendingSum >= threshold) return { paid: false, status: 'mempool', reason: 'enough seen, waiting for confirmations', ...base };
     if (confirmedSum > 0n || pendingSum > 0n) return { paid: false, status: 'partial', reason: 'partial payment so far', ...base };
     return { paid: false, status: 'pending', reason: 'nothing received yet', ...base };
 }

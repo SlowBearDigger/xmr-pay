@@ -30,6 +30,13 @@ const xfer = ({ amount, height, conf = 10, pool = false, unlock = 0 }) => ({
 ok('toRow reads confirmed height', toRow(xfer({ amount: 1n, height: 2000 })).height === 2000);
 ok('toRow in-pool height is 0', toRow(xfer({ amount: 1n, height: 0, pool: true })).height === 0);
 
+// --- unlock_time: locked ONLY while still in the future (elapsed = spendable) ---
+ok('unlock_time 0 → not locked', toRow(xfer({ amount: 1n, height: 2000, unlock: 0 })).locked === false);
+ok('FUTURE block-height unlock → locked', toRow(xfer({ amount: 1n, height: 2000, conf: 10, unlock: 10000000 })).locked === true);
+ok('PAST/elapsed block-height unlock → NOT locked (was wrongly rejected before)', toRow(xfer({ amount: 1n, height: 2000, conf: 10, unlock: 1010 })).locked === false);
+ok('FUTURE timestamp unlock → locked', toRow(xfer({ amount: 1n, height: 2000, conf: 10, unlock: Math.floor(Date.now() / 1000) + 99999 })).locked === true);
+ok('PAST timestamp unlock → NOT locked', toRow(xfer({ amount: 1n, height: 2000, conf: 10, unlock: 1600000000 })).locked === false);
+
 // --- creditableRows: the pure filter ---
 const rows = [
     { height: 1000, amountPico: 5n, inPool: false },  // stale (old session)

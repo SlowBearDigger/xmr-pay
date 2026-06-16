@@ -44,20 +44,42 @@ function toRow(t) {
     const confirmations = Number(call(tx, 'getNumConfirmations', 'numConfirmations') ?? 0) || 0;
     const isConfirmed = !!call(tx, 'getIsConfirmed', 'isConfirmed');
     const inPool = !isConfirmed || !!call(tx, 'getInTxPool', 'inTxPool');
-    // "locked" = an EXPLICIT unlock_time (the time-lock scam), NOT the benign
-    // ~10-block maturation that getIsLocked() also reports. otherwise the scanner
-    // would hold a normal confirmed payment as `locked` for 10 blocks while the
-    // wallet-rpc watcher and proof mode (which gate on unlock_time only) already
-    // call it paid — a drift between transports. maturation is governed by
-    // confirmations + minConfirmations; this gates only the malicious freeze.
-    const ut = call(tx, 'getUnlockTime', 'unlockTime');
-    const locked = ut != null && String(ut) !== '' && String(ut) !== '0';
+    // parse unlock_time (consensus time-lock). NOT the benign ~10-block maturation
+    // that getIsLocked() folds in — that's handled by confirmations + minConfirmations.
+    let unlockTime = 0n;
+    try { const u = call(tx, 'getUnlockTime', 'unlockTime'); if (u != null && String(u) !== '') unlockTime = BigInt(String(u)); } catch { unlockTime = 0n; }
     const txid = call(tx, 'getHash', 'hash') || call(t, 'getTxHash', 'txHash') || null;
     const amountPico = big(call(t, 'getAmount', 'amount') ?? 0n);
+    // the daemon flags a tx whose inputs it has seen double-spent. while that flag
+    // is set the payment is contested — never credit it (a reorg could replace it).
+    // monerod clears it once the tx is firmly in the chain. (MoneroPay surfaces
+    // this field but doesn't gate on it; we gate — strictly safer.)
+    const doubleSpendSeen = !!call(tx, 'getIsDoubleSpendSeen', 'isDoubleSpendSeen');
     // the block this transfer landed in (0 / falsy while still in the mempool).
     // used to bind a payment to the order that was live when it arrived.
     const height = Number(call(tx, 'getHeight', 'height') ?? 0) || 0;
-    return { txid, amountPico, confirmations, inPool, locked, height };
+    // "locked" = the unlock_time has NOT yet elapsed (a future time-lock — the
+    // scam vector, funds not spendable). an ALREADY-elapsed unlock_time means the
+    // funds are spendable now → NOT locked (rejecting those, as we used to, threw
+    // away legit payments). Monero encodes unlock_time as a block height when
+    // < 500000000, else a unix timestamp. (MoneroPay/BTCPay only handle the
+    // block-height form; we handle both.) the ~10-block maturation stays the job
+    // of confirmations + minConfirmations, so we under-estimate the tip by 1 (the
+    // tx's own block is conf #1) to never unlock a block early.
+    let locked = false;
+    if (unlockTime > 0n) {
+        if (unlockTime < 500000000n) {
+            const currentHeight = BigInt(height > 0 ? height + confirmations - 1 : 0);
+            locked = currentHeight < unlockTime;
+        } else {
+            locked = BigInt(Math.floor(Date.now() / 1000)) < unlockTime;
+        }
+    }
+    // the minor subaddress index this transfer landed on — lets ONE account-wide
+    // getTransfers be distributed across many orders (the O(1)-per-tick batch path).
+    const si = Number(call(t, 'getSubaddressIndex', 'subaddressIndex'));
+    const subaddressIndex = Number.isFinite(si) ? si : null;
+    return { txid, amountPico, confirmations, inPool, locked, height, doubleSpendSeen, subaddressIndex };
 }
 
 // an order can only ever be paid by money that arrives AFTER the order exists.
@@ -72,7 +94,7 @@ function creditableRows(rows, minHeight, grace = BIRTHDAY_GRACE) {
     return rows.filter(r => !r.height || r.height >= floor);
 }
 
-async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0 } = {}) {
+async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0, syncTimeoutMs = 120000 } = {}) {
     if (!primaryAddress || !privateViewKey) throw new Error('primaryAddress and privateViewKey are required (view-only)');
     if (!Array.isArray(nodes) || nodes.length === 0) throw new Error('at least one node URI is required');
     const m = lazyMonero();
@@ -102,11 +124,22 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     }
 
     // connect to the first reachable node
-    let connected = null;
-    for (const u of nodes) {
-        try { await wallet.setDaemonConnection(u); if (await wallet.isConnectedToDaemon()) { connected = u; break; } } catch { /* next */ }
+    let connected = null, nodeIdx = -1;
+    for (let i = 0; i < nodes.length; i++) {
+        try { await wallet.setDaemonConnection(nodes[i]); if (await wallet.isConnectedToDaemon()) { connected = nodes[i]; nodeIdx = i; break; } } catch { /* next */ }
     }
     if (!connected) { try { await wallet.close(false); } catch { /* ignore */ } throw new Error('no node reachable: ' + nodes.join(', ')); }
+
+    // rotate to the NEXT reachable node — used when the current one degrades mid-run
+    // (monero-ts holds ONE daemon connection; without this a single failing node
+    // silently stalls the agent until restart). returns the new node, or null.
+    async function rotateNode() {
+        for (let k = 1; k <= nodes.length; k++) {
+            const i = (nodeIdx + k) % nodes.length;
+            try { await wallet.setDaemonConnection(nodes[i]); if (await wallet.isConnectedToDaemon()) { connected = nodes[i]; nodeIdx = i; return nodes[i]; } } catch { /* next */ }
+        }
+        return null;
+    }
 
     // opened an existing wallet → its current height IS the birthday/start
     if (birthday == null) { try { birthday = Number(await wallet.getHeight()); } catch { birthday = 0; } }
@@ -115,10 +148,25 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     let viewOnly = true;
     try { const sk = await wallet.getPrivateSpendKey(); viewOnly = !sk || /^0+$/.test(sk); } catch { viewOnly = true; }
 
-    async function doSync() { await wallet.sync(birthday != null ? birthday : undefined); }
+    // time-bound the sync: monero-ts wallet.sync() has no timeout, so a half-open
+    // node (accepts the socket, never answers) would hang the poll tick FOREVER —
+    // the tick's try/catch only fires on a THROW, not a hang. on timeout/error,
+    // fail over to the next node and retry once before giving up to the caller.
+    const startH = () => (birthday != null ? birthday : undefined);
+    async function syncOnce() {
+        let to; const timer = new Promise((_, rej) => { to = setTimeout(() => rej(new Error(`wallet sync timed out after ${syncTimeoutMs}ms`)), syncTimeoutMs); if (to.unref) to.unref(); });
+        try { await Promise.race([wallet.sync(startH()), timer]); } finally { clearTimeout(to); }
+    }
+    async function doSync() {
+        try { await syncOnce(); }
+        catch (e) {
+            if (nodes.length > 1 && await rotateNode()) { await syncOnce(); return; }   // failover + one retry
+            throw e;
+        }
+    }
 
     return {
-        node: connected,
+        get node() { return connected; },
         viewOnly,
         birthdayHeight: birthday,
         async newSubaddress(label = '') {
@@ -130,14 +178,52 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
             return { address: call(sub, 'getAddress', 'address'), index: Number(call(sub, 'getIndex', 'index')), atHeight };
         },
         async addressAt(index) { return await wallet.getAddress(accountIndex, index); },
-        async checkOrder({ subaddressIndex, amount, minConfirmations = 1, minHeight = null, sync = true }) {
+        async checkOrder({ subaddressIndex, amount, minConfirmations = 1, minHeight = null, sync = true, toleranceXmr = '0' }) {
             if (sync) await doSync();
             // materialize the index so a fresh order's subaddress is actually scanned
             try { await wallet.getAddress(accountIndex, subaddressIndex); } catch { /* lookahead covers it */ }
             const transfers = await wallet.getTransfers({ accountIndex, subaddressIndex, isIncoming: true });
             // only credit payments that arrived at/after the order's birthday
             const rows = creditableRows(transfers.map(toRow), minHeight);
-            return summarizeTransfers(rows, xmrToPico(amount), minConfirmations);
+            return summarizeTransfers(rows, xmrToPico(amount), minConfirmations, xmrToPico(toleranceXmr || '0'));
+        },
+        // BATCH check: ONE account-wide getTransfers, distributed across many orders
+        // by subaddress index — O(1) wallet queries per tick instead of O(orders)
+        // (one getTransfers PER order). this is the scale path: 1000 pending orders
+        // = 1 query/tick, not 1000. mirrors MoneroPay's single-query-then-distribute.
+        // `list`: [{ id, index, amount, birthdayHeight }]. returns Map(id → result).
+        async checkOrders(list, { minConfirmations = 1, toleranceXmr = '0', sync = true } = {}) {
+            if (sync) await doSync();
+            const out = new Map();
+            if (!Array.isArray(list) || list.length === 0) return out;
+            // bound the query to the OLDEST pending order's birthday — a long-running
+            // wallet accumulates years of transfers, and scanning all of them every
+            // tick would creep back toward the cost we just removed. no pending
+            // order's payment is below its own birthday, so this can't miss one.
+            // (MoneroPay does the same via findMinCreationHeight.) defensive: if this
+            // monero-ts build rejects the height-bounded query shape, fall back.
+            let minHeight = Infinity;
+            for (const o of list) { const b = Number(o.birthdayHeight); if (Number.isFinite(b) && b < minHeight) minHeight = b; }
+            let transfers;
+            try {
+                transfers = (Number.isFinite(minHeight) && minHeight > 0)
+                    ? await wallet.getTransfers({ accountIndex, isIncoming: true, txQuery: { minHeight } })
+                    : await wallet.getTransfers({ accountIndex, isIncoming: true });
+            } catch { transfers = await wallet.getTransfers({ accountIndex, isIncoming: true }); }
+            const byIndex = new Map();
+            for (const t of transfers) {
+                const row = toRow(t);
+                if (row.subaddressIndex == null) continue;
+                let arr = byIndex.get(row.subaddressIndex);
+                if (!arr) { arr = []; byIndex.set(row.subaddressIndex, arr); }
+                arr.push(row);
+            }
+            const tolPico = xmrToPico(toleranceXmr || '0');
+            for (const o of list) {
+                const rows = creditableRows(byIndex.get(o.index) || [], o.birthdayHeight != null ? o.birthdayHeight : null);
+                out.set(o.id, summarizeTransfers(rows, xmrToPico(o.amount), minConfirmations, tolPico));
+            }
+            return out;
         },
         // generate an InProof for a received tx. recipient-side, so the view key
         // is enough — it proves to ANYONE that this subaddress received this tx,
