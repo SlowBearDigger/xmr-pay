@@ -17,6 +17,7 @@ var XP_STR = {
         verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard — paste manually',
         detectBtn: "I've paid — detect it", detecting: 'Checking the blockchain…', watching: 'Watching the blockchain for your payment…',
         paidTitle: 'Payment confirmed', confs: 'confirmations',
+        overpaidMsg: 'You overpaid {x} XMR — contact the merchant for a refund of the difference.',
         receiptSigner: 'Signed by', receiptDownload: 'Download receipt', receiptVerify: 'Verify receipt',
         underpaid: 'Received {r} XMR, expected {e}',
         topupMsg: 'Detected {r} XMR — send {s} more to complete',
@@ -52,6 +53,7 @@ var XP_STR = {
         verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles — pega a mano',
         detectBtn: 'Ya pagué — detectar', detecting: 'Revisando la blockchain…', watching: 'Esperando tu pago en la blockchain…',
         paidTitle: 'Pago confirmado', confs: 'confirmaciones',
+        overpaidMsg: 'Pagaste {x} XMR de más — contacta al comerciante para el reembolso de la diferencia.',
         receiptSigner: 'Firmado por', receiptDownload: 'Descargar recibo', receiptVerify: 'Verificar recibo',
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
         topupMsg: 'Detectado {r} XMR — envía {s} más para completar',
@@ -137,6 +139,7 @@ var XP_CSS = [
     '.ring{width:54px;height:54px;border:3px solid var(--xp-green);border-radius:50%;display:flex;align-items:center;justify-content:center;',
     'margin:0 auto 10px;color:var(--xp-green);font-size:26px;}',
     '.ok .t{font-size:13px;font-weight:800;text-transform:var(--xp-case);}',
+    '.ok .over{margin:12px auto 0;max-width:280px;font-size:11px;line-height:1.5;color:var(--xp-amber,#f59e0b);border:1px solid var(--xp-amber,#f59e0b);border-radius:6px;padding:8px 10px;}',
     '.ok .c{font-size:10px;color:var(--xp-muted);margin-top:5px;}',
     '.rcpt{margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:center;}',
     '.rcpt .fp{font-size:9px;color:var(--xp-muted);letter-spacing:var(--xp-track);word-break:break-all;}',
@@ -552,6 +555,7 @@ class XmrPay extends HTMLElement {
         var body = root.querySelector('.body');
         body.innerHTML = '<div class="ok"><div class="ring">✓</div><div class="t">' + t.paidTitle + '</div>' +
             '<div class="c">' + (out.confirmations != null ? out.confirmations + ' ' + t.confs : '') + '</div>' +
+            (out.overpaid ? '<div class="over">' + t.overpaidMsg.replace('{x}', xpEsc(String(out.overpaidXmr != null ? out.overpaidXmr : ''))) + '</div>' : '') +
             '<div class="rcpt hidden"></div></div>';
         // the cryptographic receipt — engine-level, so ANY embedder gets it (not
         // just WooCommerce). on paid, fetch the merchant-signed receipt and show a
@@ -565,8 +569,13 @@ class XmrPay extends HTMLElement {
         this.dispatchEvent(new CustomEvent('xmr-pay:paid', { detail: out, bubbles: true, composed: true }));
         // auto-redirect is opt-in (redirect-url). but a downloadable receipt must
         // not be yanked away — when one is shown, keep the buyer on the page.
-        var redirect = this.getAttribute('redirect-url');
-        if (redirect && !hasReceipt) setTimeout(function () { location.assign(redirect); }, 2500);
+        // SANITIZE: only an absolute http(s) URL or a single-slash same-origin path
+        // is followed. NEVER a javascript:/data:/protocol-relative value — location
+        // .assign('javascript:…') EXECUTES it (XSS). the embedder sets this attribute,
+        // but a value from untrusted input must not become script execution.
+        var redirect = this.getAttribute('redirect-url') || '';
+        var safeRedirect = (/^https?:\/\//i.test(redirect) || /^\/[^/]/.test(redirect)) ? redirect : '';
+        if (safeRedirect && !hasReceipt) setTimeout(function () { location.assign(safeRedirect); }, 2500);
     }
 
     // fetch the signed receipt (from receipt-url, the agent /receipt/:id or a

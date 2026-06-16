@@ -79,6 +79,7 @@ async function wizard() {
     const merchantName = await ask(rd,'Store name (shown on receipts, optional)', { def: '' });
     const webhookUrl = await ask(rd,'Store webhook URL (blank to add later)', { def: '' });
     const port = await ask(rd,'Port', { def: '8788', validate: a => /^\d+$/.test(a) ? null : 'a port number' });
+    const toleranceXmr = await ask(rd,'Underpayment tolerance in XMR', { def: '0', hint: 'accept if the buyer is short by up to this (dust/fee/rounding); 0 = exact', validate: a => /^\d+(\.\d{1,12})?$/.test(a) ? null : 'an XMR amount like 0 or 0.0001' });
     rd.close();
 
     // restore height = the node's current tip, so it scans from NOW — instant, no
@@ -96,7 +97,7 @@ async function wizard() {
         webhookUrl: webhookUrl || undefined,
         webhookSecret: webhookUrl ? 'whsec_' + crypto.randomBytes(16).toString('hex') : undefined,
         token: crypto.randomBytes(16).toString('hex'),
-        port: Number(port), minConfirmations: 1, pool: 8,
+        port: Number(port), minConfirmations: 1, pool: 8, toleranceXmr,
         expiryHours: 24,           // drop unpaid orders after a day (bounds work + memory; 0 = never)
         paidRetentionHours: 168,   // retire settled orders after a week (store stays bounded; 0 = keep)
     };
@@ -154,6 +155,7 @@ function applyConfig(cfg, dataDir = DATA_DIR, e = process.env) {
     e.AGENT_TOKEN = cfg.token || '';
     e.PORT = String(cfg.port || 8788);
     e.XMR_MIN_CONFIRMATIONS = String(cfg.minConfirmations || 1);
+    if (cfg.toleranceXmr != null && cfg.toleranceXmr !== '') e.XMR_TOLERANCE_XMR = String(cfg.toleranceXmr);
     e.XMR_SUBADDRESS_POOL = String(cfg.pool || 8);
     if (cfg.expiryHours != null) e.XMR_EXPIRY_HOURS = String(cfg.expiryHours);
     if (cfg.paidRetentionHours != null) e.XMR_PAID_RETENTION_HOURS = String(cfg.paidRetentionHours);

@@ -67,11 +67,18 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('tick did not re-fire onPaid for the settled order', paidCalls.length === 1);
     ok('tick syncs the wallet ONCE per poll (not per order)', ms.syncs === 1, `synced ${ms.syncs}×`);
 
-    // bind an EXISTING subaddress index (e.g. a re-registered order after restart)
-    const o3 = await agent.createOrder({ id: 'ord_3', amount: '0.05', index: 1 });
-    ok('createOrder can bind an existing subaddress index', o3.index === 1 && o3.address === 'sub_1');
+    // bind a SPECIFIC, UNUSED subaddress index (advanced/external management)
+    const o3 = await agent.createOrder({ id: 'ord_3', amount: '0.05', index: 77 });
+    ok('createOrder binds a specific UNUSED subaddress index', o3.index === 77 && o3.address === 'sub_77');
     r = await agent.check('ord_3');
-    ok('bound order sees the same chain payments (0.1) → paid for 0.05', r.paid && r.status === 'paid');
+    ok('a freshly-bound, unpaid subaddress is NOT paid', !r.paid && r.status === 'pending');
+
+    // CRITICAL — one subaddress backs at most ONE order. binding an index already
+    // held by another order is REJECTED; otherwise a single payment to it would
+    // credit BOTH (double-credit). index 1 belongs to ord_1.
+    let dbl = false;
+    try { await agent.createOrder({ id: 'ord_dbl', amount: '0.05', index: 1 }); } catch { dbl = true; }
+    ok('REJECTS reusing an in-use subaddress index (no double-credit)', dbl);
 
     // dedup + introspection
     let threw = false;
@@ -80,6 +87,17 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('list returns all orders', agent.list().length === 3);
     ok('get returns the order by id', agent.get('ord_2').id === 'ord_2');
     ok('check on an unknown order → null', (await agent.check('nope')) === null);
+
+    // amount sanitization: a bad/zero amount must be rejected BEFORE a subaddress
+    // is allocated — never wedge the poller, never auto-pay a 0-amount order.
+    const before = agent.list().length;
+    const subBefore = ms.newSubCalls;
+    for (const bad of ['0', '0.00', 'abc', '-1', '1e5', '1,5']) {
+        let rej = false;
+        try { await agent.createOrder({ amount: bad }); } catch { rej = true; }
+        ok(`createOrder rejects bad amount ${JSON.stringify(bad)}`, rej);
+    }
+    ok('rejected amounts allocate NO subaddress + create NO order', agent.list().length === before && ms.newSubCalls === subBefore);
 
     agent.stop();
 
@@ -110,6 +128,65 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     await a3.createOrder({ id: 'n1', amount: '0.1' });
     ok('without a pool, createOrder creates one subaddress on demand', ms3.newSubCalls === 1 && a3.poolReady() === 0);
     a3.stop();
+
+    // --- reload/wallet-counter COLLISION: a lost wallet cache makes newSubaddress
+    // re-issue low indices that overlap an order RELOADED from the store. the
+    // fresh order must SKIP the collided index, never share a subaddress. ---
+    const reloaded = new Map();
+    reloaded.set('old', { id: 'old', amount: '0.02', address: 'sub_1', index: 1, status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: '0.02', txids: [] });
+    const msC = mockScanner();   // its counter starts at 0 → next newSubaddress = index 1 (collides!)
+    const aC = createPaymentAgent({ scanner: msC, store: reloaded, minConfirmations: 1 });
+    const fresh = await aC.createOrder({ id: 'fresh', amount: '0.02' });
+    ok('fresh order SKIPS the reloaded order\'s index (no collision)', fresh.index !== 1, `got idx ${fresh.index}`);
+    // and a payment to the reloaded order\'s subaddress credits ONLY it
+    msC.rowsByIndex.set(1, [row(20000000000)]);   // 0.02 paid to index 1
+    const rOld = await aC.check('old'); const rFresh = await aC.check('fresh');
+    ok('payment to index 1 credits ONLY the order that owns it', rOld.paid === true && rFresh.paid === false);
+    aC.stop();
+
+    // CONCURRENCY: two simultaneous binds of the SAME explicit index must not both
+    // win (a check-then-act TOCTOU around the addressAt await would double-credit).
+    const msR = mockScanner();
+    const aR = createPaymentAgent({ scanner: msR, minConfirmations: 1 });
+    const race = await Promise.allSettled([
+        aR.createOrder({ id: 'r1', amount: '0.02', index: 5 }),
+        aR.createOrder({ id: 'r2', amount: '0.02', index: 5 }),
+        aR.createOrder({ id: 'r3', amount: '0.02', index: 5 }),
+    ]);
+    ok('concurrent same-index binds → exactly ONE wins', race.filter(r => r.status === 'fulfilled').length === 1);
+    ok('only one order ends up on the contested index', aR.list().filter(o => o.index === 5).length === 1);
+    aR.stop();
+
+    // ── BATCH tick: ONE checkOrders for ALL pending orders (the O(1) scale path) ──
+    {
+        let batchCalls = 0, n = 0; const paid = [];
+        const ms = {
+            async sync() {},
+            async newSubaddress() { const i = ++n; return { address: 'b' + i, index: i, atHeight: 1000 }; },
+            async checkOrder() { return { paid: false, status: 'pending', receivedXmr: 0, shortfallXmr: '0.1', confirmations: 0, txids: [] }; },
+            async checkOrders(list) {
+                batchCalls++; this._last = list;
+                const out = new Map();
+                for (const o of list) {
+                    out.set(o.id, o.id === 'b2'
+                        ? { paid: true, status: 'paid', receivedXmr: 0.1, receivedPico: '100000000000', shortfallXmr: '0', confirmations: 5, txids: ['tx'], overpaid: false, overpaidXmr: '0' }
+                        : { paid: false, status: 'pending', receivedXmr: 0, shortfallXmr: String(o.amount), confirmations: 0, txids: [] });
+                }
+                return out;
+            },
+        };
+        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, pollMs: 1e9, onPaid: o => paid.push(o.id) });
+        await a.createOrder({ id: 'b1', amount: '0.1' });
+        await a.createOrder({ id: 'b2', amount: '0.1' });
+        await a.createOrder({ id: 'b3', amount: '0.1' });
+        await a.tick();
+        ok('batch tick calls checkOrders ONCE for all pending (O(1), not O(N))', batchCalls === 1, `${batchCalls} calls`);
+        ok('batch result folded: b2 settled, b1/b3 still pending', a.get('b2').paid === true && !a.get('b1').paid && !a.get('b3').paid);
+        ok('onPaid fired exactly once for the newly-paid order', paid.length === 1 && paid[0] === 'b2');
+        await a.tick();
+        ok('a settled order is NOT re-checked — the batch only gets the 2 still-pending', ms._last.length === 2 && !ms._last.find(x => x.id === 'b2'));
+        a.stop();
+    }
 
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);

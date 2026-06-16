@@ -81,6 +81,7 @@ function send(res, code, body) {
         restoreHeight: env.XMR_RESTORE_HEIGHT != null && env.XMR_RESTORE_HEIGHT !== '' ? Number(env.XMR_RESTORE_HEIGHT) : undefined,
         path: env.XMR_WALLET_PATH || undefined,
         password: env.XMR_WALLET_PASSWORD || '',
+        syncTimeoutMs: intEnv('XMR_SYNC_TIMEOUT_MS', 120000),   // (C) bound a hung sync; fail over to the next node
     });
 
     // refuse to run anything but a view-only wallet — a spend key here would be
@@ -108,11 +109,54 @@ function send(res, code, body) {
         console.log(`[receipt] signing fingerprint ${receiptFp}  — publish this so buyers can pin it`);
     } catch (e) { console.warn(`[receipt] disabled — could not load/create a signing key: ${e.message}`); }
 
+    // ── durable fulfillment webhook ─────────────────────────────────────────
+    // the order.paid webhook is the merchant's notification to fulfill. firing it
+    // ONCE (even with sendWebhook's internal retries) loses it if their endpoint is
+    // briefly down — the order is paid on-chain but the merchant never hears. so we
+    // track delivery PER ORDER (persisted in orders.json) and re-attempt undelivered
+    // ones on a sweep with capped backoff, surviving endpoint outages AND restarts.
+    function buildWebhookPayload(order) {
+        return {
+            event: 'order.paid',
+            order_id: order.id,
+            amount_xmr: order.amount,           // what was owed
+            received_xmr: order.receivedXmr,    // what actually landed (≥ owed)
+            overpaid: !!order.overpaid,         // buyer sent MORE than owed
+            overpaid_xmr: order.overpaidXmr || '0', // exact excess to refund
+            address: order.address,             // the per-order subaddress paid
+            txids: order.txids,
+            confirmations: order.confirmations,
+            network: env.XMR_NETWORK || 'mainnet',
+            receipt: order.receipt,             // signed receipt envelope (if minted)
+        };
+    }
+    async function deliverWebhook(orderId) {
+        if (!env.FULFILL_WEBHOOK_URL) return;
+        const order = store.get(orderId);
+        if (!order || !order.paid || order.webhookDelivered) return;
+        order.webhookAttempts = (order.webhookAttempts || 0) + 1;
+        let res;
+        try { res = await sendWebhook(env.FULFILL_WEBHOOK_URL, buildWebhookPayload(order), { secret: env.FULFILL_WEBHOOK_SECRET }); }
+        catch (e) { res = { delivered: false, error: e.message }; }
+        if (res && res.delivered) {
+            order.webhookDelivered = true; order.webhookNextAt = 0;
+            console.log(`[webhook] ${orderId} delivered (attempt ${order.webhookAttempts})`);
+        } else {
+            // capped exponential backoff (5s → … → 30 min ceiling); keep retrying
+            // while the order lives in the store. GET /order/:id shows it undelivered.
+            const backoff = Math.min(1800000, 5000 * 2 ** Math.min(order.webhookAttempts - 1, 8));
+            order.webhookNextAt = Date.now() + backoff;
+            console.warn(`[webhook] ${orderId} undelivered (attempt ${order.webhookAttempts}, ${(res && (res.status || res.error)) || '?'}) — retry in ${Math.round(backoff / 1000)}s`);
+        }
+        saveOrders(store);
+    }
+
     const agent = createPaymentAgent({
         scanner,
         store,
         idgen: () => `ord_${(++idc).toString(36)}`,
         minConfirmations: intEnv('XMR_MIN_CONFIRMATIONS', 1),
+        toleranceXmr: env.XMR_TOLERANCE_XMR || '0',   // (B) accept within this much of the price (dust/fee/rounding); default exact
         pollMs: intEnv('POLL_MS', 15000),
         // pre-warm a pool of subaddresses so POST /order is instant even while a
         // wallet sync holds the lock (set 0 to create one per order on demand).
@@ -157,21 +201,11 @@ function send(res, code, body) {
             }
 
             if (env.FULFILL_WEBHOOK_URL) {
-                try {
-                    await sendWebhook(env.FULFILL_WEBHOOK_URL,
-                        {
-                            event: 'order.paid',
-                            order_id: order.id,
-                            amount_xmr: order.amount,           // what was owed
-                            received_xmr: order.receivedXmr,    // what actually landed (≥ owed)
-                            address: order.address,             // the per-order subaddress paid
-                            txids: order.txids,
-                            confirmations: order.confirmations,
-                            network: env.XMR_NETWORK || 'mainnet',
-                            receipt: order.receipt,             // signed receipt envelope (if minted) — the store stores it for the buyer
-                        },
-                        { secret: env.FULFILL_WEBHOOK_SECRET });
-                } catch (e) { console.error(`[webhook] ${order.id} failed: ${e.message}`); }
+                // mark pending on the LIVE order (onPaid gets a snapshot) so the flag
+                // persists + the sweep can re-attempt; then try once immediately.
+                const live = store.get(order.id);
+                if (live) { live.webhookDelivered = false; live.webhookAttempts = 0; live.webhookNextAt = 0; }
+                await deliverWebhook(order.id);
             }
         },
     });
@@ -202,11 +236,30 @@ function send(res, code, body) {
         return _tipInflight;
     }
 
+    // (A) the scanner's OWN synced height (local wallet read, cached 3s). compared to
+    // the daemon tip it tells whether we're CAUGHT UP — so a behind/just-restarted
+    // agent can say "node catching up" instead of reporting a paid order as pending.
+    let _wh = { h: 0, at: 0 };
+    async function walletHeight() {
+        const now = Date.now();
+        if (_wh.h && now - _wh.at < 3000) return _wh.h;
+        try { const h = await scanner.height(); if (Number.isFinite(h) && h > 0) { _wh.h = h; _wh.at = Date.now(); } } catch { /* keep last */ }
+        return _wh.h || null;
+    }
+    const SYNC_GAP = intEnv('XMR_SYNC_GAP', 2);   // blocks behind tip still considered "synced"
+
     const server = http.createServer(async (req, res) => {
         const url = req.url.split('?')[0];
         try {
             if (req.method === 'GET' && url === '/healthz') {
-                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady(), receipt: receiptFp || null });
+                // count paid orders whose fulfillment webhook is still undelivered —
+                // a non-zero value means a merchant endpoint is down / mis-set, NOT a
+                // lost payment (the funds are on-chain; the order is paid).
+                let undeliveredWebhooks = 0;
+                if (env.FULFILL_WEBHOOK_URL) for (const o of store.values()) if (o.paid && o.webhookDelivered === false) undeliveredWebhooks++;
+                const dh = await tipHeight(), wh = await walletHeight();
+                const synced = (wh != null && dh != null) ? (dh - wh) <= SYNC_GAP : null;
+                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady(), receipt: receiptFp || null, undeliveredWebhooks, walletHeight: wh, daemonHeight: dh, synced });
             }
             if (req.method === 'POST' && url === '/order') {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
@@ -229,7 +282,12 @@ function send(res, code, body) {
                 // fresh, so a status poll never triggers a per-request wallet sync.
                 const r = agent.get(decodeURIComponent(m[1]));
                 if (!r) return send(res, 404, { error: 'unknown order' });
-                return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: await tipHeight(), txids: r.txids });
+                const dh = await tipHeight(), wh = await walletHeight();
+                // (A) syncing = the scanner is still catching up to the tip AND this
+                // order isn't paid yet → the UI shows "node catching up", not a
+                // misleading "pending" that looks like the payment was missed.
+                const syncing = !r.paid && wh != null && dh != null && (dh - wh) > SYNC_GAP;
+                return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, overpaid: !!r.overpaid, overpaidXmr: r.overpaidXmr || '0', confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: dh, walletHeight: wh, syncing, txids: r.txids, webhookDelivered: r.webhookDelivered !== false });
             }
             // the signed receipt for a paid order. token-gated like /order/:id so
             // receipts are not enumerable on the open agent — the buyer fetches
@@ -247,6 +305,20 @@ function send(res, code, body) {
         } catch (e) { send(res, 500, { error: 'agent error' }); }
     });
     server.listen(PORT, BIND, () => console.log(`payment agent on http://${BIND}:${PORT}  (POST /order · GET /order/:id · GET /receipt/:id · GET /healthz)`));
+
+    // re-attempt any paid order whose webhook is still undelivered (endpoint was
+    // down at pay time, or we just restarted with one pending in orders.json). only
+    // touches orders explicitly flagged false — orders paid before this feature
+    // (webhookDelivered === undefined) are treated as already handled, never re-spammed.
+    if (env.FULFILL_WEBHOOK_URL) {
+        const _webhookSweep = setInterval(() => {
+            const now = Date.now();
+            for (const o of store.values()) {
+                if (o.paid && o.webhookDelivered === false && (o.webhookNextAt || 0) <= now) deliverWebhook(o.id);
+            }
+        }, intEnv('XMR_WEBHOOK_SWEEP_MS', 30000));
+        if (_webhookSweep.unref) _webhookSweep.unref();
+    }
 
     const _persist = setInterval(() => saveOrders(store), 30000); if (_persist.unref) _persist.unref();
     // persist the WALLET cache too (subaddress indices + scan progress). without

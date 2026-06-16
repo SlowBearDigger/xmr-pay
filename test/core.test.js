@@ -58,6 +58,21 @@ ok('finder module uses finderColor at the quiet-zone offset', cc.includes('x="8"
 ok('pico → string → pico round-trips', core.picoToXmrString(50000000817n) === '0.050000000817' && xmrToPico('0.050000000817') === 50000000817n);
 ok('whole-XMR pico string', core.picoToXmrString(5000000000000n) === '5');
 ok('zero', core.picoToXmrString(0n) === '0');
+ok('negative pico formats with a leading minus (not garbage)', core.picoToXmrString(-1n) === '-0.000000000001');
+
+// ── arithmetic: money is EXACT piconero, never float drift ──────────────────
+const { classifyResult, atomicToPico } = require('../src/verify');
+// a 1-piconero overpay must be the EXACT string "0.000000000001" — the old float
+// (picoToXmr) would serialize a 1-pico excess as "1e-12", a broken XMR amount.
+const op = classifyResult({ isGood: true, receivedPico: xmrToPico('0.02') + 1n, confirmations: 10, inTxPool: false }, { expectedPico: xmrToPico('0.02'), minConfirmations: 1 });
+ok('overpaid excess is an exact string (no scientific/float)', op.status === 'ok' && op.overpaid === true && op.overpaidXmr === '0.000000000001');
+ok('exact pay → not overpaid, excess "0"', classifyResult({ isGood: true, receivedPico: xmrToPico('0.02'), confirmations: 10, inTxPool: false }, { expectedPico: xmrToPico('0.02'), minConfirmations: 1 }).overpaidXmr === '0');
+// atomicToPico: exact for bigint/string of ANY size; fail-closed on a lossy number
+ok('atomicToPico: huge amount as a STRING is exact', atomicToPico('18446744073709551615') === 18446744073709551615n);
+ok('atomicToPico: bigint passes through exactly', atomicToPico(9007199254740993n) === 9007199254740993n);
+let lossyThrew = false; try { atomicToPico(9e16); } catch { lossyThrew = true; }
+ok('atomicToPico: a precision-lost number (>2^53) fails CLOSED', lossyThrew);
+ok('atomicToPico: a safe-integer number still works', atomicToPico(20000000000) === 20000000000n);
 
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -93,13 +93,43 @@ const row = (pico, o = {}) => ({ txid: (o.id || 't') + '_' + pico, amountPico: B
         const s1 = summarizeTransfers(dust, req, 1);
         ok('1000 dust installments summing to 1.0 → paid', s1.paid && s1.status === 'paid', `${s1.receivedXmr}`);
 
-        // one giant overpay
+        // one giant overpay — paid, and flagged overpaid with the EXACT excess
         const s2 = summarizeTransfers([row(50000000000000)], req, 1); // 50 XMR for a 1 XMR order
         ok('massive overpay → paid (received 50)', s2.paid && Number(s2.receivedXmr) === 50);
+        ok('overpay → flagged overpaid, exact excess', s2.overpaid === true && s2.overpaidXmr === '49');
+        // exact payment is NOT flagged overpaid
+        const s2e = summarizeTransfers([row(1000000000000)], req, 1); // exactly 1 XMR
+        ok('exact pay → not overpaid, excess 0', s2e.paid && s2e.overpaid === false && s2e.overpaidXmr === '0');
+        // defense in depth: expected 0 must NEVER summarize as paid (0 >= 0)
+        const s2z = summarizeTransfers([row(0)], 0n, 1);
+        ok('expected 0 → NOT paid (no false-paid on a zero-amount order)', s2z.paid === false && s2z.status === 'invalid');
 
         // all in mempool (0-conf) → not paid yet
         const s3 = summarizeTransfers([row(2000000000000, { pool: true, confs: 0 })], req, 1);
         ok('confirmed-amount but all in mempool → not paid (mempool)', !s3.paid && s3.status === 'mempool', s3.status);
+
+        // double_spend_seen: a CONFIRMED, sufficient payment is still NOT credited
+        // while the daemon flags it as double-spent (contested) — stricter than
+        // MoneroPay/BTCPay, which don't gate on this.
+        const ds = { ...row(1000000000000, { confs: 50 }), doubleSpendSeen: true };
+        const s3d = summarizeTransfers([ds], req, 1);
+        ok('double_spend_seen confirmed payment → NOT paid (held until flag clears)', !s3d.paid, s3d.status);
+        // once the flag clears, the same payment settles normally
+        const s3dc = summarizeTransfers([{ ...ds, doubleSpendSeen: false }], req, 1);
+        ok('cleared double_spend_seen → paid', s3dc.paid && s3dc.status === 'paid');
+
+        // payment tolerance: within tolerancePico of the price still completes (dust/
+        // fee/rounding), shortfall 0, not overpaid; but tolerance can NEVER reach the
+        // price (no false-pay on ~nothing).
+        const tol = 200000000000n; // 0.2 XMR
+        const tOk = summarizeTransfers([row(900000000000)], req, 1, tol); // 0.9, threshold 0.8 → paid
+        ok('within tolerance → paid (not stuck underpaid), shortfall 0, not overpaid', tOk.paid && tOk.shortfallXmr === '0' && tOk.overpaid === false);
+        const tNo = summarizeTransfers([row(700000000000)], req, 1, tol); // 0.7 < 0.8 → not paid
+        ok('below (price − tolerance) → still not paid', !tNo.paid);
+        const tGuard = summarizeTransfers([row(1)], req, 1, 2000000000000n); // tol >= price → no false-pay
+        ok('tolerance >= price never false-pays', !tGuard.paid);
+        const tExact = summarizeTransfers([row(1000000000000)], req, 1, tol); // exact pay with tolerance set → not overpaid
+        ok('exact pay with tolerance set → paid, not overpaid', tExact.paid && tExact.overpaid === false);
 
         // all explicitly locked (time-lock) → held, not paid
         const s4 = summarizeTransfers([row(2000000000000, { locked: true })], req, 1);
