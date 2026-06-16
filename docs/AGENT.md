@@ -116,12 +116,23 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `XMR_RESTORE_HEIGHT` | | tip | omit to start at "now" (instant first sync); set it only to find older payments |
 | `XMR_WALLET_PATH` | | in-memory | persist the wallet so restarts skip re-scanning |
 | `XMR_MIN_CONFIRMATIONS` | | `1` | raise for high-value orders (reorg safety) |
+| `XMR_TOLERANCE_XMR` | | `0` | accept a buyer who lands short by up to this (absorbs dust/fee/rounding so they aren't stuck "underpaid"). `0` = exact; never allowed to reach the price |
 | `XMR_EXPIRY_HOURS` | | `0` | drop unpaid orders after N hours (bounds per-tick work + memory; `0` = never). A late payment still lands on-chain — it just won't auto-complete. |
 | `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order|/receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
 | `POLL_MS` | | `15000` | how often the poller re-checks pending orders |
 | `FULFILL_WEBHOOK_URL` / `_SECRET` | | — | where + how to sign the `order.paid` webhook |
 | `AGENT_TOKEN` | | — | optional `Bearer` token required on `POST /order` |
 | `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost — it holds your view key |
+| `XMR_SUBADDRESS_POOL` | | `8` | how many fresh subaddresses to pre-derive so `POST /order` never blocks on the wallet |
+| `XMR_SYNC_TIMEOUT_MS` | | `120000` | per-sync timeout; on a stall the agent fails over to the next node |
+| `XMR_SYNC_GAP` | | `2` | lookahead gap when scanning subaddresses |
+| `XMR_WEBHOOK_SWEEP_MS` | | `30000` | how often to retry undelivered `order.paid` webhooks (durable redelivery) |
+| `XMR_MERCHANT_NAME` | | — | shown on signed receipts |
+| `XMR_RECEIPT_KEY` | | auto | path to the receipt-signing key (PEM); generated + persisted if absent |
+| `XMR_RECEIPT_TXPROOF` | | off | also embed a buyer `tx_proof` per payment so receipts verify against Monero with no merchant trust |
+| `XMR_WALLET_PASSWORD` | | — | encrypts the persisted wallet file at `XMR_WALLET_PATH` |
+| `XMR_ORDERS_FILE` | | in `XMR_PAY_DIR` | path to the orders ledger (JSON) |
+| `XMR_PAY_DIR` | | `./xmr-pay-data` | data dir for the `npx xmr-pay` CLI (config, wallet, orders, keys) |
 
 ---
 

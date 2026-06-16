@@ -164,24 +164,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                 }
                 continue;
             }
-            // EXPIRY: drop a still-unpaid order once it's older than expiryMs. this
-            // bounds both the per-tick work and memory — without it, abandoned
-            // orders accumulate forever and every poll checks all of them. a late
-            // payment to an expired order still lands on-chain in YOUR wallet; it
-            // just won't auto-complete (reconcile via onExpire). off by default.
-            // NEVER expire an order that already RECEIVED funds (a partial payment):
-            // dropping it would orphan a top-up and lose the buyer's money on a
-            // vanished order. keep it alive so a top-up still completes it — the
-            // principle both MoneroPay (never auto-deletes) and BTCPay (preserves the
-            // payment record past expiry) hold to: a payment is never orphaned.
-            const hasFunds = Number(order.receivedXmr) > 0 || (order.receivedPico != null && BigInt(order.receivedPico) > 0n);
-            if (expiryMs > 0 && order.createdAt != null && (nowMs - order.createdAt) >= expiryMs && !hasFunds) {
-                order.status = 'expired';
-                orders.delete(order.id);                                  // safe to delete the current entry mid-iteration
-                if (onExpire) { try { await onExpire({ ...order }); } catch { /* caller's job */ } }
-                continue;
-            }
-            toCheck.push(order);   // collect; checked in ONE batch below
+            toCheck.push(order);   // collect EVERY unpaid order; checked in ONE batch below
         }
         if (toCheck.length === 0) return;
         // ONE account-wide getTransfers, distributed across every pending order.
@@ -193,6 +176,29 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         } else {
             // fallback for a scanner without batch support (e.g. a test mock): per-order
             for (const order of toCheck) { try { await check(order.id, { sync: false }); } catch { /* transient */ } }
+        }
+        // EXPIRY runs AFTER the check, on FRESH state. drop a still-unpaid order
+        // once it's older than expiryMs — this bounds per-tick work and memory
+        // (abandoned orders don't accumulate forever). a late payment to an expired
+        // order still lands on-chain in YOUR wallet; it just won't auto-complete
+        // (reconcile via onExpire). off by default.
+        // NEVER expire an order that already RECEIVED funds (a partial payment):
+        // dropping it would orphan a top-up and lose the buyer's money on a vanished
+        // order. checking BEFORE expiring is what makes this airtight — a payment
+        // that landed in this very tick's window is now recorded, so an order with
+        // funds on-chain can never be expired (the race that orphaned it is gone).
+        // the principle both MoneroPay (never auto-deletes) and BTCPay (preserves the
+        // payment record past expiry) hold to: a payment is never orphaned.
+        if (expiryMs > 0) {
+            for (const order of toCheck) {
+                if (order.paid) continue;   // settled by the check above
+                const hasFunds = Number(order.receivedXmr) > 0 || (order.receivedPico != null && BigInt(order.receivedPico) > 0n);
+                if (order.createdAt != null && (nowMs - order.createdAt) >= expiryMs && !hasFunds) {
+                    order.status = 'expired';
+                    orders.delete(order.id);
+                    if (onExpire) { try { await onExpire({ ...order }); } catch { /* caller's job */ } }
+                }
+            }
         }
     }
 

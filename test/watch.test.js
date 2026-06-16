@@ -25,6 +25,9 @@ const TRANSFERS = {
         { txid: '8'.repeat(64), amount: 50000000000, confirmations: 3, type: 'in', unlock_time: 0, locked: false },
         { txid: '9'.repeat(64), amount: 50000004821, confirmations: 3, type: 'in', unlock_time: 0, locked: false },
     ], pool: [] },
+    // 9: a CONFIRMED payment the daemon flagged double_spend_seen — contested money.
+    //    must be HELD (never credited) until the flag clears, even past minConf.
+    9: { in: [{ txid: 'cd'.repeat(32), amount: 100000000000, confirmations: 8, type: 'in', unlock_time: 0, locked: false, double_spend_seen: true }], pool: [] },
 };
 
 const server = http.createServer((req, res) => {
@@ -85,6 +88,13 @@ const server = http.createServer((req, res) => {
 
     r = await w.checkOrder({ subaddressIndex: 6, amount: '0.1' });
     ok('nothing yet → pending', !r.paid && r.status === 'pending');
+
+    // double_spend_seen gate must be LIVE on the wallet-rpc transport (it was dead
+    // before incoming() carried the flag — a contested tx would have been credited).
+    r = await w.checkOrder({ subaddressIndex: 9, amount: '0.1' });
+    ok('double_spend_seen confirmed tx → HELD, never paid', !r.paid && r.status === 'mempool', r.status);
+    const rows9 = await w.incoming(9);
+    ok('incoming() surfaces doubleSpendSeen so the gate can fire', !!rows9[0] && rows9[0].doubleSpendSeen === true);
 
     ok('height passthrough', (await w.height()) === 2135999);
 

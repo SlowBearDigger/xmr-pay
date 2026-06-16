@@ -8,7 +8,7 @@
 // to localhost or a private network; if you must expose it, put a reverse
 // proxy with auth in front (wallet-rpc's digest auth is not implemented here).
 
-const { xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, fetchUnlockTime } = require('./verify');
+const { xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, fetchUnlockTime, minHeightAcross } = require('./verify');
 
 async function rpc(url, method, params = {}, timeoutMs = 15000) {
     let r;
@@ -126,6 +126,11 @@ function createWatcher({ url, accountIndex = 0 } = {}) {
                 amountPico: atomicToPico(t.amount),
                 confirmations: Number(t.confirmations || 0),
                 inPool: t.type === 'pool',
+                // the daemon saw a conflicting spend of these inputs — contested
+                // money. summarizeTransfers holds it as pending (never credits) until
+                // the flag clears. without this the double-spend gate is DEAD on the
+                // wallet-rpc transport (the WASM scanner sets it in scanner.js).
+                doubleSpendSeen: !!t.double_spend_seen,
                 // recent wallet-rpc reports `locked`; fall back to unlock_time
                 locked: t.locked !== undefined ? !!t.locked && Number(t.unlock_time || 0) !== 0 : Number(t.unlock_time || 0) !== 0,
                 unlockTime: Number(t.unlock_time || 0),
@@ -247,7 +252,26 @@ async function verifyPaymentViaRpc(opts) {
             return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — the wallet has no record of this tx and no daemon nodes were given; pass `nodes` or set skipUnlockTimeCheck', ...base };
         }
         if (unlockTime !== 0n) {
-            return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable, not accepted`, ...base };
+            // a FUTURE unlock_time is the freeze scam (unspendable). but an
+            // ALREADY-ELAPSED unlock_time means the funds are spendable now — accept
+            // it, matching verifyPayment + watch mode (rejecting those stranded legit
+            // payments forever on this transport). Monero: unlock_time < 5e8 is a
+            // block height, else a unix timestamp.
+            let elapsed;
+            if (unlockTime >= 500000000n) {
+                elapsed = BigInt(Math.floor(Date.now() / 1000)) >= unlockTime;
+            } else {
+                // chain tip: prefer the wallet's own height (self-contained on this
+                // transport — no daemon needed), fall back to the given nodes. can't
+                // establish it → treat as still locked (conservative, never early).
+                let tip = null;
+                try { const h = await rpc(url, 'get_height', {}, timeoutMs); tip = (h && h.height != null) ? BigInt(String(h.height)) : null; } catch { /* fall back to nodes */ }
+                if (tip === null && nodes && nodes.length) tip = await minHeightAcross(nodes);
+                elapsed = tip !== null && tip >= unlockTime;
+            }
+            if (!elapsed) {
+                return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable yet, not accepted`, ...base };
+            }
         }
     }
 

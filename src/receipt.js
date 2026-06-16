@@ -33,9 +33,14 @@ const RECEIPT_TYP = 'xmr-pay.receipt/1';
 function receiptFromOrder(order, { merchant = {}, network, paidAt = null, txProofs = [] } = {}) {
     if (!order || order.id == null) throw new Error('order with an id is required');
     const amountPico = xmrToPico(order.amount);
+    // a receipt commits to an EXACT piconero figure. the agent always records the
+    // exact `receivedPico` (agent.js), so that branch is the norm. when it's absent
+    // (a legacy/hand-built order) fall back to the exact `amountPico` — a paid order
+    // received at least the amount — rather than re-deriving piconero from the FLOAT
+    // `receivedXmr`, which can drift sub-piconero and sign a slightly-wrong value.
     const receivedPico = order.receivedPico != null
         ? BigInt(order.receivedPico)
-        : xmrToPico(order.receivedXmr != null ? order.receivedXmr : order.amount);
+        : amountPico;
     const txids = Array.isArray(order.txids) ? order.txids.filter(isValidTxid) : [];
 
     const body = {

@@ -22,6 +22,27 @@ function mockScanner() {
     };
     return self;
 }
+// a scanner with batch support (checkOrders) — the real production path. counts
+// how many account-wide getTransfers it does so a test can assert O(1) per tick.
+function batchMockScanner() {
+    let idx = 0; const rows = new Map();
+    const self = {
+        rows, getTransfers: 0,
+        async sync() { },
+        async newSubaddress() { const i = ++idx; return { address: 's' + i, index: i, atHeight: 1000 + i }; },
+        async addressAt(i) { return 's' + i; },
+        // present so the constructor accepts the scanner (real scanner has both);
+        // the batch path below never calls it — that's the whole point.
+        async checkOrder({ subaddressIndex, amount, minConfirmations = 1 }) { return summarizeTransfers(rows.get(subaddressIndex) || [], xmrToPico(amount), minConfirmations); },
+        async checkOrders(list, { minConfirmations = 1 } = {}) {
+            self.getTransfers++;   // ONE account-wide getTransfers, distributed to every order
+            const m = new Map();
+            for (const o of list) m.set(o.id, summarizeTransfers(rows.get(o.index) || [], xmrToPico(o.amount), minConfirmations));
+            return m;
+        },
+    };
+    return self;
+}
 let seq = 0;
 const row = (pico, confs = 10) => ({ txid: 't' + pico + '_' + (++seq), amountPico: BigInt(pico), confirmations: confs, inPool: false, locked: false });
 
@@ -97,7 +118,7 @@ const row = (pico, confs = 10) => ({ txid: 't' + pico + '_' + (++seq), amountPic
         ok('order without createdAt is never expired (safe for old ledgers)', a.get('old') !== null);
     }
 
-    // ── BOUNDING: 10k orders, 5k past expiry → store + expensive checks bounded ──
+    // ── BOUNDING: 10k orders, 5k past expiry → store stays bounded ──
     {
         let clock = 0; const ms = mockScanner();
         const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, expiryMs: 1000, now: () => clock, pollMs: 1e9 });
@@ -107,7 +128,41 @@ const row = (pico, confs = 10) => ({ txid: 't' + pico + '_' + (++seq), amountPic
         ms.checks = 0; clock = 2500;
         await a.tick();
         ok('10k orders, 5k expired → store bounded to the 5k active', a.list().length === 5000, `${a.list().length} left`);
-        ok('expensive checkOrder ran ONLY for the 5k active orders', ms.checks === 5000, `${ms.checks} checks`);
+        // every unpaid order is checked on FRESH state BEFORE the expiry decision,
+        // so a payment that landed in an order's final pre-expiry window is recorded
+        // and the order is never wrongly dropped — funds are never orphaned. that
+        // means the soon-to-expire orders get one last check too. on the real batch
+        // path that's a no-op (ONE getTransfers per tick, O(1) network — proven by
+        // the batch-path test below); only the per-order fallback mock counts 10k.
+        ok('all unpaid checked before expiry (never orphan a late payment)', ms.checks === 10000, `${ms.checks} checks`);
+    }
+
+    // ── SCALE: the production batch path is O(1) in NETWORK calls, not O(orders) ──
+    {
+        let clock = 0; const bms = batchMockScanner();
+        const a = createPaymentAgent({ scanner: bms, minConfirmations: 1, expiryMs: 1000, now: () => clock, pollMs: 1e9 });
+        for (let i = 0; i < 10000; i++) await a.createOrder({ id: 'b' + i, amount: '0.1' });
+        bms.getTransfers = 0; clock = 500;
+        await a.tick();
+        ok('batch path: ONE getTransfers per tick for 10k orders (O(1) network)', bms.getTransfers === 1, `${bms.getTransfers} calls`);
+    }
+
+    // ── RACE (the orphan-funds bug): a payment that lands in the very tick an order
+    //    would expire COMPLETES the order — it is never expired-then-orphaned. the
+    //    check now runs BEFORE the expiry sweep on fresh state, so the just-arrived
+    //    funds are seen first. (the old order: expire on stale receivedXmr, then
+    //    check — which dropped the order before the funds were ever recorded.) ──
+    {
+        let clock = 0; const expired = []; const ms = mockScanner();
+        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, expiryMs: 1000, now: () => clock, onExpire: o => expired.push(o.id), pollMs: 1e9 });
+        const o = await a.createOrder({ id: 'race', amount: '0.1' });
+        // funds arrive on-chain, but no tick has run since; clock jumps to exactly expiry.
+        ms.rows.set(o.index, [row(xmrToPico('0.1'))]);
+        clock = 1000;
+        await a.tick();
+        const r = a.get('race');
+        ok('order funded in its expiry tick is COMPLETED, not orphaned', !!r && r.paid === true && r.status === 'paid', r ? r.status : 'deleted');
+        ok('onExpire never fired for the funded order', expired.length === 0);
     }
 
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);

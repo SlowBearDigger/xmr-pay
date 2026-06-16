@@ -347,7 +347,7 @@ mint a new one for the attacker's address.
 const { generateSigningKey, signConfig } = require('xmr-pay/config');
 const key = generateSigningKey();                 // keep privateKey offline
 const env = signConfig({ address, amount: '0.05', networkType: 'mainnet' }, key.privateKey);
-// env.fingerprint e.g. "2847-789f-a55a-bd90" — publish where buyers can check
+// env.fingerprint e.g. "2847-789f-a55a-bd90-1234-5678" — publish where buyers can check
 ```
 
 ```html
