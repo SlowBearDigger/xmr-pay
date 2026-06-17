@@ -21,10 +21,13 @@ function lazyMonero() { if (!monerojs) monerojs = require('monero-ts'); return m
 // read the current chain tip straight from a daemon (plain /get_height RPC, no
 // wallet needed). lets a FRESH scanner start at "now" instead of scanning history
 // — a payment scanner never needs the past, so this makes the first sync instant.
+// trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
+const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
+
 async function fetchDaemonHeight(nodes) {
     for (const u of nodes) {
         try {
-            const r = await fetch(String(u).replace(/\/+$/, '') + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
+            const r = await fetch(rtrimSlash(u) + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
             if (!r.ok) continue;
             const j = await r.json();
             const h = Number(j && j.height);

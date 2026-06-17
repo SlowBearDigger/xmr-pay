@@ -10,10 +10,13 @@
 
 const { xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, fetchUnlockTime, minHeightAcross } = require('./verify');
 
+// trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
+const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
+
 async function rpc(url, method, params = {}, timeoutMs = 15000) {
     let r;
     try {
-        r = await fetch(String(url).replace(/\/+$/, '') + '/json_rpc', {
+        r = await fetch(rtrimSlash(url) + '/json_rpc', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jsonrpc: '2.0', id: '0', method, params }),

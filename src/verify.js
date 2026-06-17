@@ -77,7 +77,9 @@ function picoToXmrString(pico) {
     const neg = pico < 0n;
     const s = (neg ? -pico : pico).toString().padStart(13, '0');
     const i = s.slice(0, -12);
-    const f = s.slice(-12).replace(/0+$/, '');
+    let f = s.slice(-12);
+    let fend = f.length; while (fend > 0 && f.charCodeAt(fend - 1) === 48) fend--;  // trim trailing zeros, no regex (ReDoS-free)
+    f = f.slice(0, fend);
     return (neg ? '-' : '') + (f ? `${i}.${f}` : i);
 }
 
@@ -225,9 +227,12 @@ async function checkOnNode({ nodeUri, networkType, txid, proofKind, proof, addre
 // read ONE node's unlock_time for a txid; null if it could not be read. the
 // tx_hash in the daemon response is cross-checked against the requested txid, so
 // a node cannot answer with a different (unlocked) tx's blob.
+// trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
+const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
+
 async function unlockTimeFromNode(uri, txid) {
     try {
-        const r = await fetch(String(uri).replace(/\/+$/, '') + '/get_transactions', {
+        const r = await fetch(rtrimSlash(uri) + '/get_transactions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ txs_hashes: [txid], decode_as_json: true }),
@@ -250,7 +255,7 @@ async function unlockTimeFromNode(uri, txid) {
 // read the chain tip from ONE node (plain /get_height). null if unreadable.
 async function daemonHeightFromNode(uri) {
     try {
-        const r = await fetch(String(uri).replace(/\/+$/, '') + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
+        const r = await fetch(rtrimSlash(uri) + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
         if (!r.ok) return null;
         const j = await r.json();
         const h = j && (j.height ?? j.count);

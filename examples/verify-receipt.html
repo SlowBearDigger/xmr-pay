@@ -92,7 +92,7 @@ function picoToXmr(pico){
   const whole = s.slice(0,-12), frac = s.slice(-12).replace(/0+$/,'');
   return (neg?'-':'') + whole + (frac?'.'+frac:'');
 }
-const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function verifyEnvelope(env){
   if (!env || typeof env!=='object' || env.typ!==TYP || !env.receipt || !env.sig || !env.pubkey) return { valid:false, reason:'not a signed xmr-pay receipt' };
