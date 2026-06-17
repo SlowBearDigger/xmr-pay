@@ -22,6 +22,8 @@ const A = { rst: '\x1b[0m', o: '\x1b[38;5;208m', dim: '\x1b[2m', b: '\x1b[1m', g
 const say = (s = '') => console.log(s);
 const orange = s => A.o + s + A.rst;
 const dim = s => A.dim + s + A.rst;
+// trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
+const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
 
 // a line reader robust to BOTH an interactive TTY and piped/buffered stdin
 // (rl.question loses lines that arrive before it is called; a queue does not).
@@ -54,7 +56,7 @@ const viewKeyCheck = k => /^[0-9a-fA-F]{64}$/.test(k) ? null : 'a private view k
 
 async function nodeHeight(node) {
     try {
-        const base = String(node).replace(/\/+$/, '');
+        const base = rtrimSlash(node);
         const res = await fetch(base + '/get_height', { signal: AbortSignal.timeout(6000) });
         const j = await res.json();
         return Number(j && j.height) || 0;
@@ -130,8 +132,11 @@ function ensureMonero() {
     if (!present) {
         say(orange('  Setting up the Monero engine (one-time download)…'));
         fs.mkdirSync(DATA_DIR, { recursive: true });
-        require('child_process').execSync(
-            `npm install monero-ts@^0.11 --no-save --no-audit --no-fund --loglevel=error --prefix ${JSON.stringify(DATA_DIR)}`,
+        // execFileSync (args array, no shell) so DATA_DIR can never be interpreted
+        // by a shell — it's a path, not a command fragment.
+        const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+        require('child_process').execFileSync(
+            npm, ['install', 'monero-ts@^0.11', '--no-save', '--no-audit', '--no-fund', '--loglevel=error', '--prefix', DATA_DIR],
             { stdio: 'inherit' });
     }
     process.env.NODE_PATH = [localNM, process.env.NODE_PATH || ''].filter(Boolean).join(path.delimiter);
