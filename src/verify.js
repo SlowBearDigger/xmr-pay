@@ -56,13 +56,20 @@ function isValidTxid(t) {
 // validator would reject — so convert a number to a plain 12-decimal string
 // first (this caps a number at piconero precision; pass a string for full nonce
 // fidelity).
+// Monero amounts are uint64 piconero — MONEY_SUPPLY (cryptonote_config.h) is
+// ((uint64_t)-1). a value above this ceiling cannot exist on-chain, so we reject
+// it just as monerod's parse_amount does (tests/unit_tests/parse_amount.cpp:
+// "184467440738" and "18446744073709551616" → invalid).
+const MAX_PICO = 18446744073709551615n;
 function xmrToPico(x) {
     const s = typeof x === 'number'
         ? (Number.isFinite(x) ? x.toFixed(12).replace(/\.?0+$/, '') : 'NaN')
         : String(x).trim();
     if (!/^\d+(\.\d{1,12})?$/.test(s)) throw new Error(`invalid XMR amount: ${x}`);
     const [i, f = ''] = s.split('.');
-    return BigInt(i) * 1000000000000n + BigInt(f.padEnd(12, '0'));
+    const pico = BigInt(i) * 1000000000000n + BigInt(f.padEnd(12, '0'));
+    if (pico > MAX_PICO) throw new Error(`XMR amount exceeds the maximum supply: ${x}`);
+    return pico;
 }
 function picoToXmr(p) {
     return Number(p) / 1e12;
@@ -104,7 +111,9 @@ function atomicToPico(v) {
     }
     const s = String(v).trim();
     if (!/^-?\d+$/.test(s)) throw new Error(`non-integer atomic amount: ${v}`);
-    return BigInt(s);
+    const r = BigInt(s);
+    if (r > MAX_PICO) throw new Error(`atomic amount exceeds uint64 max: ${v}`);   // a real on-chain amount is uint64
+    return r;
 }
 
 // classify the proof material: a 64-hex tx secret key, or an (Out|In)Proof
