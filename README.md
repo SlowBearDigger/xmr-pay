@@ -51,7 +51,7 @@ npm i xmr-pay monero-ts        # monero-ts only needed for server-side detection
 npx xmr-pay        # setup wizard (address + view key + node), then it runs
 ```
 
-It scans from the current block (no historical rescan), generates the token + webhook secret, persists its wallet + orders, and prints the exact values to paste into your store. `npx xmr-pay start` runs it again later.
+It scans from the current block (no historical rescan), generates the token + webhook secret, asks your **settlement speed** (`instant` 0-conf · `fast` 1 block · `secure` 10 blocks), persists its wallet + orders, and prints the exact values to paste into your store. `npx xmr-pay start` runs it again later.
 
 Donations welcome, no obligation:
 `42w9YaCW8UwZ2BmQztNmUd6JgYVcjW7LXEMTcQqHdmtFCsSo5RGY2eQg2iZ3WyBSSs63gnhczLkJ46yfr4ojCXWT3H1ZBbR`
@@ -95,7 +95,7 @@ documented in full in **[docs/AGENT.md](docs/AGENT.md)**.
 
 ## Checkout widget
 
-One self-hosted file (`widget/xmr-pay.js`, ~85 KB, bundles its own QR encoder —
+One self-hosted file (`widget/xmr-pay.js`, ~98 KB, bundles its own QR encoder —
 no external requests, ever). Drop it in and you have a Monero checkout.
 
 ```html
@@ -309,6 +309,7 @@ that sidesteps the bundled WASM wallet and its transitive dependencies entirely.
 | Proof for a payment to someone else | proofs are address-bound — rejected |
 | Reusing a real proof on another order | amount-nonce + `alreadyUsed` — `replay`/`underpaid` |
 | Off by 1 piconero | integer-piconero compare — `underpaid` |
+| Amount above Monero's max supply (uint64) | rejected — `xmrToPico`/`atomicToPico` enforce the on-chain ceiling, parity with monerod's `parse_amount` |
 | **Time-locked payment** (`unlock_time` set — confirms but frozen) | raw tx fetched from the daemon; `unlock_time ≠ 0` → `locked`. Fails **closed** if no node returns the tx |
 | A node lies | `quorum: 2+` → `node-disagreement` |
 | A node / wallet-rpc is down, slow, or times out | `node-error` — transient and **retryable**, never a false `paid`. Distinct from `invalid` so you can tell "retry" from "reject"; the example endpoint answers `503` |
@@ -384,15 +385,20 @@ cd demo && npm install && npm start    # http://localhost:8780 — click "Try it
 
 ## Validated
 
-**158 offline checks + a 92,006-case math fuzz**, plus live stagenet validation.
+**187 offline checks + a 92,006-case math fuzz**, plus live stagenet validation.
 
 - Offline: input gates 40 · core (links/QR/nonce) 22 · signed configs 10 · watch
   summing 14 · webhooks 8 · wallet-rpc verify 20 · adversarial "chaos" 27 · agent
-  lifecycle 17. The fuzz hammers the piconero math (shortfall, summing,
-  round-trips) so paying the displayed difference always completes an order to the
-  exact piconero — including the float traps (`0.1 + 0.2 = 0.3`).
-- Live on stagenet: proof verify (tx-proof + tx-key paths, nonce-grade exactness,
-  address binding, replay, quorum, mempool, all through the unlock_time gate); the
+  lifecycle 17 · monerod amount parity 29. The fuzz hammers the piconero math
+  (shortfall, summing, round-trips) so paying the displayed difference always
+  completes an order to the exact piconero — including the float traps
+  (`0.1 + 0.2 = 0.3`). The parity suite mirrors monerod's own `parse_amount`
+  (overflow ceiling, 13th-decimal, signs) so we never accept an amount the chain
+  rejects.
+- Live on stagenet: proof verify through a **13-case adversarial matrix** (exact,
+  underpaid/overpaid to the piconero, replay, address-bound rejection, malformed
+  → `invalid`, dead node → `node-error`, 2-node quorum, at 0-conf and 1-conf), all
+  through the unlock_time gate; the
   **view-only scanner** detecting a real payment via the view key alone; **two real
   payments summed** on one subaddress to complete an order; the **agent** end to
   end (per-order subaddress → settle → one-time signed webhook). Spot-checked
