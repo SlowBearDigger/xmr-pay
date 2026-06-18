@@ -62,6 +62,12 @@ function isValidTxid(t) {
 // "184467440738" and "18446744073709551616" → invalid).
 const MAX_PICO = 18446744073709551615n;
 function xmrToPico(x) {
+    // reject non-scalar inputs up front — an array like [5] would otherwise coerce
+    // via String() to "5" and be silently accepted (type-confusion). only a number,
+    // string, or bigint is a meaningful amount.
+    if (typeof x !== 'number' && typeof x !== 'string' && typeof x !== 'bigint') {
+        throw new Error(`invalid XMR amount type: ${x === null ? 'null' : Array.isArray(x) ? 'array' : typeof x}`);
+    }
     const s = typeof x === 'number'
         ? (Number.isFinite(x) ? x.toFixed(12).replace(/\.?0+$/, '') : 'NaN')
         : String(x).trim();
@@ -109,7 +115,10 @@ function atomicToPico(v) {
         if (!Number.isSafeInteger(v)) throw new Error(`atomic amount ${v} exceeds JS safe-integer precision — pass it as a string or BigInt`);
         return BigInt(v);
     }
-    const s = String(v).trim();
+    // only a string remains a meaningful atomic amount here — reject array/object/
+    // boolean (e.g. [100] would coerce to "100" and be silently accepted).
+    if (typeof v !== 'string') throw new Error(`invalid atomic amount type: ${Array.isArray(v) ? 'array' : typeof v}`);
+    const s = v.trim();
     if (!/^-?\d+$/.test(s)) throw new Error(`non-integer atomic amount: ${v}`);
     const r = BigInt(s);
     if (r > MAX_PICO) throw new Error(`atomic amount exceeds uint64 max: ${v}`);   // a real on-chain amount is uint64
