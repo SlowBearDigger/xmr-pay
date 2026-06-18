@@ -46,17 +46,26 @@ function summarizeTransfers(rows, expectedPico, minConfirmations = 1, toleranceP
     let minConfs = Infinity;
     const txids = [];
     for (const t of rows) {
-        txids.push(t.txid);
-        if (t.locked) { lockedSum += t.amountPico; continue; }
+        // fail-soft: a malformed row (null, non-object, or an amount we can't read as
+        // a BigInt) is SKIPPED, never crashes the summary — toRow always hands us
+        // clean BigInt rows, but a buggy/odd monero-ts build or a future transport
+        // must not be able to stall detection with one bad row.
+        if (!t || typeof t !== 'object') continue;
+        let amt;
+        try { amt = (typeof t.amountPico === 'bigint') ? t.amountPico : BigInt(t.amountPico); } catch { continue; }
+        if (amt < 0n) continue;                    // a negative amount can't exist on-chain — never credit it
+        if (t.txid != null) txids.push(t.txid);
+        const confs = Number(t.confirmations) || 0;
+        if (t.locked) { lockedSum += amt; continue; }
         // double_spend_seen: the daemon saw a conflicting spend of these inputs —
         // contested money. hold it as pending (never credit) until the flag clears
         // (it does once the tx is firmly in the chain). protects a low-minConf
         // merchant from a reorg-double-spend that a plain confirmation count misses.
-        if (!t.inPool && !t.doubleSpendSeen && t.confirmations >= minConfirmations) {
-            confirmedSum += t.amountPico;
-            minConfs = Math.min(minConfs, t.confirmations);
+        if (!t.inPool && !t.doubleSpendSeen && confs >= minConfirmations) {
+            confirmedSum += amt;
+            minConfs = Math.min(minConfs, confs);
         } else {
-            pendingSum += t.amountPico;
+            pendingSum += amt;
         }
     }
     // everything that has ARRIVED on-chain — confirmed, in the pool, OR confirmed
