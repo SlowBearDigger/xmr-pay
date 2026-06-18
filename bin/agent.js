@@ -82,6 +82,12 @@ async function wizard() {
     const webhookUrl = await ask(rd,'Store webhook URL (blank to add later)', { def: '' });
     const port = await ask(rd,'Port', { def: '8788', validate: a => /^\d+$/.test(a) ? null : 'a port number' });
     const toleranceXmr = await ask(rd,'Underpayment tolerance in XMR', { def: '0', hint: 'accept if the buyer is short by up to this (dust/fee/rounding); 0 = exact', validate: a => /^\d+(\.\d{1,12})?$/.test(a) ? null : 'an XMR amount like 0 or 0.0001' });
+    // settlement speed = how many confirmations before an order is "paid" (the
+    // value-at-risk knob, like BTCPay's SpeedPolicy). instant accepts a mempool tx
+    // (0-conf) — still gated by double_spend_seen + unlock_time, so it's safer than
+    // a naive 0-conf, but a mempool tx can still be dropped; use it for small/digital.
+    const speed = await ask(rd,'Settlement speed', { def: 'fast', hint: 'instant = 0-conf, accept on sight (~instant, small amounts) · fast = 1 block (~2 min) · secure = 10 blocks (fully unlocked)', validate: a => ['instant', 'fast', 'secure'].includes(a) ? null : 'instant, fast, or secure' });
+    const minConfirmations = speed === 'instant' ? 0 : speed === 'secure' ? 10 : 1;
     rd.close();
 
     // restore height = the node's current tip, so it scans from NOW — instant, no
@@ -99,7 +105,7 @@ async function wizard() {
         webhookUrl: webhookUrl || undefined,
         webhookSecret: webhookUrl ? 'whsec_' + crypto.randomBytes(16).toString('hex') : undefined,
         token: crypto.randomBytes(16).toString('hex'),
-        port: Number(port), minConfirmations: 1, pool: 8, toleranceXmr,
+        port: Number(port), minConfirmations, pool: 8, toleranceXmr,
         expiryHours: 24,           // drop unpaid orders after a day (bounds work + memory; 0 = never)
         paidRetentionHours: 168,   // retire settled orders after a week (store stays bounded; 0 = keep)
     };
