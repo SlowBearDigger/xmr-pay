@@ -45,6 +45,14 @@ Monero node from somewhere you trust.
 > **Try it all live, on stagenet:**
 > [configure the plugin yourself](https://live.xmrpay.shop) · [demo store](https://demo.xmrpay.shop) · [how it works (widget + proof)](https://xmrpay.shop/demo.html)
 
+> ### Mainnet ↔ stagenet
+> The network is **explicit** at every entry point — default is **mainnet**, use **stagenet** to test with no real money:
+> - **Widget:** `<xmr-pay network="stagenet" …>` (omit for mainnet).
+> - **Verify:** `verifyPayment({ networkType: 'stagenet', … })`.
+> - **Agent:** the `XMR_NETWORK=stagenet` env var (the `npx xmr-pay` wizard asks).
+>
+> Use a matching **address + view key + node** for the network you choose.
+
 ## Install
 
 ```
