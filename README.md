@@ -39,11 +39,11 @@ never in the buyer's browser and never on ours. A tips button needs no server at
 all; a store needs one small piece. Trustless detection just has to talk to a
 Monero node from somewhere you trust.
 
-> ### In WordPress / WooCommerce 🛒
+> ### In WordPress / WooCommerce
 > There's a dedicated plugin → **[xmr-pay for WooCommerce](https://github.com/SlowBearDigger/xmr-pay-woocommerce)** — it verifies payments in **pure PHP** (no Node, no daemon for the no-server modes; this library's crypto, reimplemented for any shared host).
 >
 > **Try it all live, on stagenet:**
-> [⚙ configure the plugin yourself](https://live.xmrpay.shop) · [🛒 demo store](https://demo.xmrpay.shop) · [🔧 how it works (widget + proof)](https://xmrpay.shop/demo.html)
+> [configure the plugin yourself](https://live.xmrpay.shop) · [demo store](https://demo.xmrpay.shop) · [how it works (widget + proof)](https://xmrpay.shop/demo.html)
 
 ## Install
 
@@ -446,7 +446,7 @@ provenance`). If a signature or hash doesn't match, don't use the file — repor
 
 ## Acknowledgements
 
-We stand on excellent open-source work — **give them a ⭐:**
+We stand on excellent open-source work — **give them a star:**
 
 - **[monero-project](https://www.getmonero.org/)** — the protocol; our money-math parity suite mirrors `parse_amount`'s own unit tests.
 - **[monero-integrations / monerophp](https://github.com/monero-integrations/monerophp)** (MIT) — the pure-PHP ed25519, key-derivation and base58 primitives the WordPress-native verifier is vendored on. The breakthrough that made "verify in PHP" possible.
