@@ -19,18 +19,22 @@ const ORDERS = new Map([
     }],
 ]);
 
-// light per-order attempt cap so the public endpoint can't be hammered for free
-// node RPCs; a real deployment uses its platform's rate limiter (see DEPLOY.md).
-const attempts = new Map();
+// per-order attempt cap within a ROLLING WINDOW so a public demo never locks up
+// permanently (it self-heals); the server also rate-limits per client IP.
+const WINDOW_MS = 10 * 60 * 1000;
+const ORDER_MAX = 150;
+const orderHits = new Map();
 
 async function handleVerify(body) {
     const { order_id, txid, proof } = body || {};
     const order = ORDERS.get(order_id);
     if (!order) return { code: 404, body: { error: 'unknown order' } };
 
-    const n = (attempts.get(order_id) || 0) + 1;
-    attempts.set(order_id, n);
-    if (n > 60) return { code: 429, body: { error: 'too many attempts — demo cooling down' } };
+    const now = Date.now();
+    const hits = (orderHits.get(order_id) || []).filter(t => now - t < WINDOW_MS);
+    hits.push(now);
+    orderHits.set(order_id, hits);
+    if (hits.length > ORDER_MAX) return { code: 429, body: { error: 'demo is busy — try again in a few minutes' } };
 
     const result = await verifyPayment({
         txid, proof,

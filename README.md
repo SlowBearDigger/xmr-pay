@@ -39,6 +39,12 @@ never in the buyer's browser and never on ours. A tips button needs no server at
 all; a store needs one small piece. Trustless detection just has to talk to a
 Monero node from somewhere you trust.
 
+> ### In WordPress / WooCommerce 🛒
+> There's a dedicated plugin → **[xmr-pay for WooCommerce](https://github.com/SlowBearDigger/xmr-pay-woocommerce)** — it verifies payments in **pure PHP** (no Node, no daemon for the no-server modes; this library's crypto, reimplemented for any shared host).
+>
+> **Try it all live, on stagenet:**
+> [⚙ configure the plugin yourself](https://live.xmrpay.shop) · [🛒 demo store](https://demo.xmrpay.shop) · [🔧 how it works (widget + proof)](https://xmrpay.shop/demo.html)
+
 ## Install
 
 ```
@@ -438,9 +444,20 @@ provenance`). If a signature or hash doesn't match, don't use the file — repor
 - **[docs/SUITE.md](docs/SUITE.md)** — how the pieces fit together
 - **[SECURITY.md](SECURITY.md)** — reporting, dependency advisories, "try to break it"
 
+## Acknowledgements
+
+We stand on excellent open-source work — **give them a ⭐:**
+
+- **[monero-project](https://www.getmonero.org/)** — the protocol; our money-math parity suite mirrors `parse_amount`'s own unit tests.
+- **[monero-integrations / monerophp](https://github.com/monero-integrations/monerophp)** (MIT) — the pure-PHP ed25519, key-derivation and base58 primitives the WordPress-native verifier is vendored on. The breakthrough that made "verify in PHP" possible.
+- **[kornrunner/php-keccak](https://github.com/kornrunner/php-keccak)** (MIT) — Keccak-256 with Monero's padding, in pure PHP.
+- **[monero-ts](https://github.com/woodser/monero-ts)** (woodser, MIT) — the WASM Monero library powering the watch/proof paths, and our ground-truth reference for cross-checking the PHP verifier.
+- **[qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)** (MIT) — the checkout widget's self-contained QR encoder.
+- **Inspiration:** [BTCPay Server](https://btcpayserver.org/)'s Monero plugin and [MoneroPay](https://gitlab.com/moneropay/moneropay) — we studied both to match (and, on reorg-safety, double-spend and arithmetic, exceed) their detection model.
+
 ## License
 
-MIT. The widget bundles [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
-(c) Kazuhiko Arase, MIT — vendored so the file makes zero external requests.
+MIT — including the vendored [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
+(c) Kazuhiko Arase, bundled so the widget makes zero external requests.
 
-A [GoXMR](https://goxmr.click) project.
+A [GoXMR](https://goxmr.click) project · also available for **[WordPress / WooCommerce](https://github.com/SlowBearDigger/xmr-pay-woocommerce)**.
