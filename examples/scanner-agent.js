@@ -151,6 +151,29 @@ function send(res, code, body) {
         saveOrders(store);
     }
 
+    // ── SSE push (instant detection) ────────────────────────────────────────
+    // BTCPay pushes invoice changes to the buyer over a socket so the checkout
+    // updates the moment a tx is seen — no polling lag. we do the same the simple
+    // way: GET /order/:id/stream is a Server-Sent-Events channel. the buyer's
+    // widget (or any client) gets the status the instant the poller folds a change.
+    // it rides through the same-origin proxy like any GET, and a slow poll stays as
+    // a backup, so a buffering proxy can never make a payment look lost.
+    const sseClients = new Map();   // orderId -> Set<res>
+    function sseCount() { let n = 0; for (const s of sseClients.values()) n += s.size; return n; }
+    async function buildStatus(r) {
+        const dh = await tipHeight(), wh = await walletHeight();
+        const syncing = !r.paid && wh != null && dh != null && (dh - wh) > SYNC_GAP;
+        return { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, overpaid: !!r.overpaid, overpaidXmr: r.overpaidXmr || '0', confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: dh, walletHeight: wh, syncing, txids: r.txids, webhookDelivered: r.webhookDelivered !== false };
+    }
+    async function pushOrder(id) {
+        const set = sseClients.get(id);
+        if (!set || set.size === 0) return;
+        const r = agent.get(id);
+        if (!r) return;
+        let body; try { body = JSON.stringify(await buildStatus(r)); } catch { return; }
+        for (const res of set) { try { res.write(`data: ${body}\n\n`); } catch { /* dropped on close */ } }
+    }
+
     const agent = createPaymentAgent({
         scanner,
         store,
@@ -158,11 +181,17 @@ function send(res, code, body) {
         minConfirmations: intEnv('XMR_MIN_CONFIRMATIONS', 1),
         toleranceXmr: env.XMR_TOLERANCE_XMR || '0',   // (B) accept within this much of the price (dust/fee/rounding); default exact
         pollMs: intEnv('POLL_MS', 15000),
+        // adaptive cadence: poll fast while a buyer is actively paying (an order is
+        // young, or a checkout stream is open), slow when idle. detection in seconds
+        // without idle-hammering the node. POLL_ACTIVE_MS >= POLL_MS disables it.
+        activePollMs: intEnv('POLL_ACTIVE_MS', 3000),
+        activeWindowMs: Math.max(0, intEnv('XMR_CHECKOUT_WINDOW_MIN', 30) * 60000),
+        activeHint: () => sseCount() > 0,   // someone is watching the checkout right now
         // pre-warm a pool of subaddresses so POST /order is instant even while a
         // wallet sync holds the lock (set 0 to create one per order on demand).
         subaddressPool: intEnv('XMR_SUBADDRESS_POOL', 8),
         poolLabel: 'order',
-        onUpdate: () => queueSave(store),   // coalesced — see queueSave (avoids O(N) writes/tick)
+        onUpdate: (o) => { queueSave(store); pushOrder(o.id); },   // coalesced save + instant SSE push to the buyer
         // drop unpaid orders older than XMR_EXPIRY_HOURS (0 = never, default). bounds
         // the per-tick work + memory; a late payment still lands on-chain in your
         // wallet — it just won't auto-complete (reconcile from the [expired] log).
@@ -173,6 +202,7 @@ function send(res, code, body) {
         paidRetentionMs: Math.max(0, (Number(env.XMR_PAID_RETENTION_HOURS) || 0) * 3600000),
         onPaid: async (order) => {
             saveOrders(store);
+            pushOrder(order.id);   // tell the buyer "paid" INSTANTLY — before the (slower) receipt mint below
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
 
             // mint + sign the receipt. the merchant signature is the offline leg;
@@ -259,7 +289,7 @@ function send(res, code, body) {
                 if (env.FULFILL_WEBHOOK_URL) for (const o of store.values()) if (o.paid && o.webhookDelivered === false) undeliveredWebhooks++;
                 const dh = await tipHeight(), wh = await walletHeight();
                 const synced = (wh != null && dh != null) ? (dh - wh) <= SYNC_GAP : null;
-                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady(), receipt: receiptFp || null, undeliveredWebhooks, walletHeight: wh, daemonHeight: dh, synced });
+                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady(), receipt: receiptFp || null, undeliveredWebhooks, streamClients: sseCount(), walletHeight: wh, daemonHeight: dh, synced });
             }
             if (req.method === 'POST' && url === '/order') {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
@@ -275,6 +305,28 @@ function send(res, code, body) {
                 });
                 return;
             }
+            // SSE stream: push status changes the instant the poller folds them, so
+            // the buyer's checkout updates in seconds (BTCPay's socket trick, done
+            // simply). EventSource can't set headers → accept the token via ?token=
+            // too. matched BEFORE the plain /order/:id route.
+            const sm = url.match(/^\/order\/([^/]+)\/stream$/);
+            if (req.method === 'GET' && sm) {
+                const qtoken = new URL(req.url, 'http://x').searchParams.get('token');
+                if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}` && qtoken !== TOKEN) return send(res, 401, { error: 'unauthorized' });
+                const id = decodeURIComponent(sm[1]);
+                const r0 = agent.get(id);
+                if (!r0) return send(res, 404, { error: 'unknown order' });
+                res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+                res.write('retry: 3000\n\n');
+                buildStatus(r0).then(s => { try { res.write(`data: ${JSON.stringify(s)}\n\n`); } catch { /* closed */ } });
+                let set = sseClients.get(id); if (!set) { set = new Set(); sseClients.set(id, set); }
+                set.add(res);
+                agent.kick();   // a watcher just arrived — poll fast now
+                const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 20000); if (ping.unref) ping.unref();
+                const cleanup = () => { clearInterval(ping); const s = sseClients.get(id); if (s) { s.delete(res); if (s.size === 0) sseClients.delete(id); } };
+                req.on('close', cleanup); res.on('error', cleanup);
+                return;
+            }
             const m = url.match(/^\/order\/([^/]+)$/);
             if (req.method === 'GET' && m) {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
@@ -282,12 +334,7 @@ function send(res, code, body) {
                 // fresh, so a status poll never triggers a per-request wallet sync.
                 const r = agent.get(decodeURIComponent(m[1]));
                 if (!r) return send(res, 404, { error: 'unknown order' });
-                const dh = await tipHeight(), wh = await walletHeight();
-                // (A) syncing = the scanner is still catching up to the tip AND this
-                // order isn't paid yet → the UI shows "node catching up", not a
-                // misleading "pending" that looks like the payment was missed.
-                const syncing = !r.paid && wh != null && dh != null && (dh - wh) > SYNC_GAP;
-                return send(res, 200, { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, overpaid: !!r.overpaid, overpaidXmr: r.overpaidXmr || '0', confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: dh, walletHeight: wh, syncing, txids: r.txids, webhookDelivered: r.webhookDelivered !== false });
+                return send(res, 200, await buildStatus(r));
             }
             // the signed receipt for a paid order. token-gated like /order/:id so
             // receipts are not enumerable on the open agent — the buyer fetches
@@ -304,7 +351,7 @@ function send(res, code, body) {
             send(res, 404, { error: 'not found' });
         } catch (e) { send(res, 500, { error: 'agent error' }); }
     });
-    server.listen(PORT, BIND, () => console.log(`payment agent on http://${BIND}:${PORT}  (POST /order · GET /order/:id · GET /receipt/:id · GET /healthz)`));
+    server.listen(PORT, BIND, () => console.log(`payment agent on http://${BIND}:${PORT}  (POST /order · GET /order/:id · GET /order/:id/stream · GET /receipt/:id · GET /healthz)`));
 
     // re-attempt any paid order whose webhook is still undelivered (endpoint was
     // down at pay time, or we just restarted with one pending in orders.json). only

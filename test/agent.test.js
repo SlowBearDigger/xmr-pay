@@ -188,6 +188,39 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
         a.stop();
     }
 
+    // adaptive polling: fast while a buyer is actively paying, slow when idle.
+    {
+        const ms = mockScanner();
+        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, pollMs: 300, activePollMs: 25, activeWindowMs: 100000 });
+        a.start();
+        await a.createOrder({ amount: '0.1', id: 'fast1' });   // young unpaid → fast cadence + kick
+        await new Promise(r => setTimeout(r, 200));
+        const fastSyncs = ms.syncs;
+        ok('adaptive: a young unpaid order polls FAST (>=4 syncs in 200ms @25ms)', fastSyncs >= 4, `${fastSyncs} syncs`);
+        // settle it, then the agent goes idle → slow cadence
+        ms.rowsByIndex.set(a.get('fast1').index, [row(xmrToPico('0.1'), { confs: 10 })]);
+        await new Promise(r => setTimeout(r, 60));
+        ok('adaptive: the order settles', a.get('fast1').paid === true);
+        const before = ms.syncs;
+        await new Promise(r => setTimeout(r, 250));
+        const idleSyncs = ms.syncs - before;
+        ok('adaptive: with no active order it polls SLOW (<=2 syncs in 250ms @300ms)', idleSyncs <= 2, `${idleSyncs} syncs`);
+        a.stop();
+    }
+
+    // kick(): a fresh order pulls the next poll in even while idle-slow.
+    {
+        const ms = mockScanner();
+        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, pollMs: 100000, activePollMs: 20, activeWindowMs: 100000 });
+        a.start();
+        await new Promise(r => setTimeout(r, 30));
+        const idle = ms.syncs;                       // ~0 — first poll is far away (pollMs huge, no orders)
+        await a.createOrder({ amount: '0.1', id: 'kick1' });   // kick → fast tick within ~20ms
+        await new Promise(r => setTimeout(r, 80));
+        ok('kick: createOrder triggers a near-immediate poll (not the 100s idle wait)', ms.syncs > idle, `${ms.syncs - idle} syncs after order`);
+        a.stop();
+    }
+
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);
 })().catch(e => { console.error('agent test error:', e); process.exit(2); });

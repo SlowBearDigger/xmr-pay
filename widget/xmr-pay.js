@@ -2323,9 +2323,9 @@ var XP_STR = {
         underpaid: 'Received {r} XMR, expected {e}',
         topupMsg: 'Detected {r} XMR — send {s} more to complete',
         topupTitle: 'Scan to send the difference',
-        mempool: 'Seen in the mempool — waiting for the first block',
+        mempool: '✓ Payment received — confirming…',
         unconfirmed: 'Not confirmed yet — try again in a minute',
-        confirming: 'Confirming — {c} confirmation(s)…',
+        confirming: '✓ Payment received — confirming ({c})…',
         replay: 'This transaction already paid another order',
         invalid: 'We couldn’t match this to your payment — check the transaction ID and proof are for THIS order',
         badTxid: 'That transaction ID looks off — it should be 64 characters. Copy the whole thing from your wallet',
@@ -2359,9 +2359,9 @@ var XP_STR = {
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
         topupMsg: 'Detectado {r} XMR — envía {s} más para completar',
         topupTitle: 'Escanea para enviar la diferencia',
-        mempool: 'Visto en el mempool — esperando el primer bloque',
+        mempool: '✓ Pago recibido — confirmando…',
         unconfirmed: 'Aún sin confirmar — prueba en un minuto',
-        confirming: 'Confirmando — {c} confirmación(es)…',
+        confirming: '✓ Pago recibido — confirmando ({c})…',
         replay: 'Esta transacción ya pagó otra orden',
         invalid: 'No pudimos relacionarlo con tu pago — revisa que el ID de transacción y la prueba sean de ESTA orden',
         badTxid: 'Ese ID de transacción no cuadra — debe tener 64 caracteres. Copia el completo desde tu wallet',
@@ -2515,9 +2515,11 @@ async function xpVerifyConfig(env) {
 }
 
 class XmrPay extends HTMLElement {
-    static get observedAttributes() { return ['address', 'amount', 'label', 'order', 'verify-url', 'status-url', 'lang', 'redirect-url', 'theme']; }
+    static get observedAttributes() { return ['address', 'amount', 'label', 'order', 'verify-url', 'status-url', 'stream-url', 'lang', 'redirect-url', 'theme']; }
 
     connectedCallback() { this._resolve().then(() => this._render()); }
+    disconnectedCallback() { this._closeStream(); clearTimeout(this._watchT); clearTimeout(this._repollT); }
+    _closeStream() { if (this._es) { try { this._es.close(); } catch (e) {} this._es = null; } this._streaming = false; }
     attributeChangedCallback() { if (this.isConnected) this._resolve().then(() => this._render()); }
 
     // work out the effective address/amount and the signing state before render.
@@ -2685,14 +2687,22 @@ class XmrPay extends HTMLElement {
         var verifyBtn = root.querySelector('.verify');
         if (verifyBtn) verifyBtn.addEventListener('click', function () { self._verify(root, verifyUrl, t); });
 
-        // watch mode: wire the "detect" button + start auto-polling the status URL.
+        // watch mode: wire the "detect" button, open a push stream if offered, and
+        // auto-poll the status URL. the stream (SSE) updates the buyer in seconds;
+        // the poll stays as a backup so a buffering proxy can't make a payment look
+        // lost — it just slows to a heartbeat cadence when a stream is live.
         var statusUrl = (this.getAttribute('status-url') || '').trim();
+        var streamUrl = (this.getAttribute('stream-url') || '').trim();
         var detectBtn = root.querySelector('.detect');
-        if (statusUrl) {
+        if (statusUrl || streamUrl) {
             this._paidDone = false;
-            if (detectBtn) detectBtn.addEventListener('click', function () { self._watch(root, statusUrl, t, true); });
-            clearTimeout(this._watchT);
-            this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, 1500);
+            if (detectBtn && statusUrl) detectBtn.addEventListener('click', function () { self._watch(root, statusUrl, t, true); });
+            this._closeStream();
+            if (streamUrl && typeof EventSource !== 'undefined') this._stream(root, streamUrl, t);
+            if (statusUrl) {
+                clearTimeout(this._watchT);
+                this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, 1500);
+            }
         }
 
         // smart paste: Feather's "formatted proof" (and similar) is one text
@@ -2808,6 +2818,24 @@ class XmrPay extends HTMLElement {
         }
     }
 
+    // push stream: connect to the agent's SSE channel (stream-url). each event is a
+    // full status snapshot — same shape as the poll — so detection lands in seconds
+    // with no polling lag. the browser auto-reconnects on a dropped connection; the
+    // backup poll keeps running (slowed) so a proxy that buffers SSE can't strand a
+    // payment. closed once paid (or on disconnect).
+    _stream(root, streamUrl, t) {
+        var self = this;
+        var es;
+        try { es = new EventSource(streamUrl); } catch (e) { return; }
+        this._es = es;
+        this._streaming = true;
+        es.onmessage = function (ev) {
+            var out; try { out = JSON.parse(ev.data); } catch (e) { return; }
+            self._applyWatch(root, out, t);
+        };
+        es.onerror = function () { /* keep the poll backup; EventSource auto-reconnects */ };
+    }
+
     // watch mode poll: GET the status URL (the agent /order/:id or a proxy) and
     // react. no proof to paste — the agent is already scanning the chain. keeps
     // polling on mempool/unconfirmed; on paid → _success (→ receipt). `manual`
@@ -2816,7 +2844,6 @@ class XmrPay extends HTMLElement {
         if (this._paidDone || !this.isConnected) return;
         var self = this;
         var btn = root.querySelector('.detect');
-        var wst = root.querySelector('.wst');
         if (manual && btn) { btn.disabled = true; btn.textContent = t.detecting; }
         var out = null;
         try {
@@ -2825,16 +2852,30 @@ class XmrPay extends HTMLElement {
         } catch (e) { out = { reachable: false }; }
         if (manual && btn) { btn.disabled = false; btn.textContent = t.detectBtn; }
         if (this._paidDone) return;
+        this._applyWatch(root, out, t);
+        // backup cadence: brisk when polling alone, a slow heartbeat when a push
+        // stream is carrying the live updates.
+        clearTimeout(this._watchT);
+        var active = out && (out.status === 'mempool' || out.status === 'unconfirmed');
+        var delay = this._streaming ? 20000 : (active ? 8000 : 6000);
+        this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, delay);
+    }
 
+    // fold one status snapshot (from a poll OR a stream event) into the UI.
+    _applyWatch(root, out, t) {
+        if (this._paidDone) return;
         if (out && out.paid) {
-            this._paidDone = true; clearTimeout(this._watchT);
+            this._paidDone = true; clearTimeout(this._watchT); this._closeStream();
             this.dispatchEvent(new CustomEvent('xmr-pay:result', { detail: out, bubbles: true, composed: true }));
             this._success(root, out, t);
             return;
         }
+        var wst = root.querySelector('.wst');
         if (wst) {
             var status = out && out.status;
             var msg;
+            // lead with "payment received" the instant a tx is seen (mempool/unconfirmed)
+            // so the buyer feels done and stops worrying — it's only confirmations left.
             if (status === 'mempool') msg = t.mempool;
             else if (status === 'unconfirmed' && out.confirmations != null) msg = t.confirming.replace('{c}', out.confirmations);
             else if ((status === 'partial' || status === 'underpaid') && out.shortfallXmr != null) msg = t.topupMsg.replace('{r}', out.receivedXmr != null ? out.receivedXmr : '?').replace('{s}', out.shortfallXmr);
@@ -2842,9 +2883,6 @@ class XmrPay extends HTMLElement {
             wst.textContent = msg;
             wst.className = 'wst' + (status === 'mempool' || status === 'unconfirmed' ? ' mid' : '');
         }
-        clearTimeout(this._watchT);
-        var delay = (out && (out.status === 'mempool' || out.status === 'unconfirmed')) ? 8000 : 6000;
-        this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, delay);
     }
 
     _success(root, out, t) {

@@ -11,7 +11,12 @@
 
 const { xmrToPico } = require('./verify');   // pure parser; does NOT load monero-ts
 
-function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, paidRetentionMs = 0, toleranceXmr = '0', now = Date.now } = {}) {
+// adaptive polling: when a buyer is actively paying we want to detect in seconds,
+// but idle-polling that fast wastes node calls. so the loop runs at `activePollMs`
+// while there's an unpaid order inside its checkout window (or an `activeHint`
+// signal — e.g. an open SSE stream), and falls back to `pollMs` when idle. set
+// activePollMs >= pollMs (the default) to disable adaptivity (fixed cadence).
+function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, activePollMs = 15000, activeWindowMs = 1800000, activeHint, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, paidRetentionMs = 0, toleranceXmr = '0', now = Date.now } = {}) {
     if (!scanner || typeof scanner.checkOrder !== 'function' || typeof scanner.newSubaddress !== 'function') {
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
@@ -95,6 +100,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
             }
             const order = { id: oid, amount: String(amount), address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: String(amount), txids: [] };
             orders.set(oid, order);
+            kick();   // a fresh order means a buyer is about to pay — pull the next poll in
             return { ...order };
         } finally {
             reserving.delete(oid);
@@ -202,17 +208,33 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         }
     }
 
-    let timer = null, running = false;
+    let timer = null, running = false, ticking = false;
+    // how long until the next poll: fast while a buyer is actively paying, slow when idle.
+    function nextDelay() {
+        if (activePollMs >= pollMs) return pollMs;   // adaptivity disabled
+        if (typeof activeHint === 'function') { try { if (activeHint()) return activePollMs; } catch { /* ignore */ } }
+        const t = now();
+        for (const o of orders.values()) {
+            if (!o.paid && o.createdAt != null && (t - o.createdAt) < activeWindowMs) return activePollMs;
+        }
+        return pollMs;
+    }
+    function schedule(ms) { if (timer) clearTimeout(timer); timer = setTimeout(loop, ms); if (timer.unref) timer.unref(); }
+    // pull the next poll in NOW (capped) — e.g. a new order arrived or a stream opened.
+    // no-op while a tick is in flight (its tail reschedules via nextDelay anyway), so
+    // there is never more than one pending timer.
+    function kick() { if (!running || ticking) return; schedule(Math.min(activePollMs, 1500)); }
+    async function loop() {
+        if (!running) return;
+        ticking = true;
+        try { await tick(); } finally { ticking = false; }
+        if (running) schedule(nextDelay());
+    }
     function start() {
         if (running) return;
         running = true;
         if (subaddressPool > 0) fillPool(subaddressPool);   // pre-warm BEFORE the first sync holds the wallet lock
-        const loop = async () => {
-            if (!running) return;
-            await tick();
-            if (running) { timer = setTimeout(loop, pollMs); if (timer.unref) timer.unref(); }
-        };
-        timer = setTimeout(loop, pollMs); if (timer.unref) timer.unref();
+        schedule(nextDelay());
     }
     function stop() { running = false; if (timer) { clearTimeout(timer); timer = null; } }
 
@@ -223,6 +245,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         get: (id) => { const o = orders.get(id); return o ? { ...o } : null; },
         list: () => [...orders.values()].map(o => ({ ...o })),
         poolReady: () => pool.length,
+        kick,   // pull the next poll in now (e.g. a buyer just opened the checkout stream)
         start,
         stop,
     };
