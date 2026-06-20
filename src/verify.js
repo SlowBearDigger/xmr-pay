@@ -146,7 +146,10 @@ function detectProofKind(proof) {
 function classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { expectedPico, tolerancePico = 0n, minConfirmations = 1 }) {
     if (!isGood) return { status: 'invalid', reason: 'proof does not verify for this txid/address' };
     if (receivedPico <= 0n) return { status: 'no-funds', reason: 'this transaction sent nothing to this address' };
-    if (receivedPico < expectedPico - tolerancePico) {
+    // clamp tolerance: a tolerance >= expectedPico would make the threshold <= 0, meaning
+    // any positive amount passes — mirrors the guard in summarizeTransfers and classify_payment.
+    const threshold = (tolerancePico > 0n && tolerancePico < expectedPico) ? expectedPico - tolerancePico : expectedPico;
+    if (receivedPico < threshold) {
         // shortfall to reach the full expected amount, computed in piconero so the
         // "send X more" the buyer is told is EXACT (float subtraction would drift).
         return {
@@ -155,7 +158,8 @@ function classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { exp
             shortfallXmr: picoToXmrString(expectedPico - receivedPico),
         };
     }
-    if (confirmations < minConfirmations) {
+    // clamp minConfirmations so a negative value never bypasses the confirmation gate.
+    if (confirmations < Math.max(0, minConfirmations | 0)) {
         return { status: inTxPool ? 'mempool' : 'unconfirmed', reason: `${confirmations}/${minConfirmations} confirmations` };
     }
     const overpaid = receivedPico > expectedPico;
@@ -248,6 +252,14 @@ async function checkOnNode({ nodeUri, networkType, txid, proofKind, proof, addre
 // trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
 const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
 
+// guard against non-http(s) schemes reaching fetch() — file://, data:, javascript: etc.
+// throws early so the caller sees a configuration error, not a silent wrong result.
+function assertNodeUri(uri) {
+    const u = new URL(String(uri));
+    if (u.protocol !== 'http:' && u.protocol !== 'https:')
+        throw new Error(`node URI scheme must be http or https, got: ${u.protocol} (${uri})`);
+}
+
 async function unlockTimeFromNode(uri, txid) {
     try {
         const r = await fetch(rtrimSlash(uri) + '/get_transactions', {
@@ -339,6 +351,30 @@ async function fetchUnlockTime(nodes, txid, quorum = 1) {
  * the same txid both pass and both orders settle. the returned `txid` is
  * normalized to lowercase; store and compare that form.
  */
+
+// resolve the per-node answers into a single verdict. groups answers into clusters
+// that agree on (isGood, receivedPico) and picks the largest — NOT answers[0], so a
+// bad node answering first can't block a real majority. a quorum is met only when
+// EXACTLY ONE cluster reaches `want`: two clusters that both reach it are two groups
+// of nodes that agree among themselves but contradict each other (e.g. 2 say paid, 2
+// say not-paid, want=2). resolving that by answer order would let node ordering — and
+// so an attacker who controls half the nodes and lists them first — decide a payment,
+// so an even split fails closed (agreed=false → node-disagreement). errored/absent
+// nodes never reach `answers`, so a down node in a want+1 list is still tolerated (it
+// is simply not a contradicting vote). pure + exported so the voting rule is unit-tested.
+function resolveQuorum(answers, want) {
+    const clusters = new Map();
+    for (const a of answers) {
+        const k = `${a.isGood}|${a.receivedPico}`;
+        if (!clusters.has(k)) clusters.set(k, []);
+        clusters.get(k).push(a);
+    }
+    const ranked = [...clusters.values()].sort((x, y) => y.length - x.length);
+    const majority = ranked[0] || [];
+    const quorumClusters = ranked.filter(c => c.length >= want).length;
+    return { head: majority[0] || null, agreed: majority.length >= want && quorumClusters === 1 };
+}
+
 async function verifyPayment(opts) {
     const {
         txid, proof, address, amount, nodes,
@@ -368,6 +404,12 @@ async function verifyPayment(opts) {
     if (!isValidTxid(id)) return fail('invalid', 'txid must be 64 hex chars');
     if (!isValidAddress(address, networkType)) return fail('invalid', `address is not a valid ${networkType} address`);
     if (!Array.isArray(nodes) || nodes.length === 0) return fail('invalid', 'at least one node URI required');
+    nodes.forEach(assertNodeUri);  // throws on first non-http(s) URI — configuration error, not a runtime verdict
+
+    // single-node quorum means one compromised/malicious node controls the entire
+    // verification result, including confirmations and unlock_time. the merchant
+    // opted into this risk, but make it visible so it doesn't pass silently.
+    if (nodes.length === 1 && (quorum | 0) <= 1) warnOnce('quorum=1 with a single node: that node controls confirmations and unlock_time. set nodes to 2+ and quorum=2 to require independent agreement.');
     let expectedPico;
     try { expectedPico = xmrToPico(amount); } catch (e) { return fail('invalid', e.message); }
     if (expectedPico <= 0n) return fail('invalid', 'amount must be greater than 0');
@@ -408,12 +450,7 @@ async function verifyPayment(opts) {
             : fail('node-error', `only ${answers.length}/${want} nodes answered (${msgs.join('; ') || 'no errors'})`);
     }
 
-    const head = answers[0];
-    // require `want` answers to agree, not ALL of them. this matches the
-    // documented semantics ("quorum N = N nodes must agree") and tolerates
-    // one bad/misconfigured node in a want+1 list without blocking payment.
-    const agreeing = answers.filter(a => a.isGood === head.isGood && a.receivedPico === head.receivedPico);
-    const agreed = agreeing.length >= want;
+    const { head, agreed } = resolveQuorum(answers, want);
     if (!agreed) {
         return fail('node-disagreement',
             'nodes returned different results — verify against different nodes',
@@ -474,4 +511,4 @@ async function verifyPayment(opts) {
     };
 }
 
-module.exports = { verifyPayment, fetchUnlockTime, minHeightAcross, xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, isTransientError };
+module.exports = { verifyPayment, resolveQuorum, fetchUnlockTime, minHeightAcross, xmrToPico, picoToXmr, picoToXmrString, atomicToPico, isValidAddress, isValidTxid, detectProofKind, classifyResult, isTransientError };

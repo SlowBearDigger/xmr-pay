@@ -38,22 +38,25 @@ const note = (n, x = '') => { warn++; console.log(`WARN  ${n}${x ? '  — ' + x 
     let r = await agent.check('agent_fresh');
     check('fresh order → pending (no payment yet)', r.status === 'pending' && !r.paid);
 
-    // bind an order to the FUNDED subaddress (the summed 0.1 + 0.01)
+    // bind an order to the FUNDED subaddress — the confirmed on-chain total covers it.
     await agent.createOrder({ id: 'agent_funded', amount: '0.11', index: IDX });
     r = await agent.check('agent_funded');
-    check('agent surfaces the SUMMED 0.11 on the funded subaddress (owes 0)', r.shortfallXmr === '0' && (r.status === 'locked' || r.status === 'paid'), `status ${r.status}`);
-    if (r.status === 'paid') check('onPaid fired for the now-settled 0.11 order', paid.includes('agent_funded'));
-    else note('0.11 order still locked — the 0.01 is maturing; onPaid fires once it unlocks (re-run later)');
+    check('agent surfaces the SUMMED payments on the funded subaddress (owes 0)', r.shortfallXmr === '0' && (r.status === 'locked' || r.status === 'paid'), `status ${r.status}`);
+    if (r.status === 'paid') {
+        check('onPaid fired EXACTLY ONCE for the settled order', paid.filter(x => x === 'agent_funded').length === 1);
+        // re-check is idempotent — no double settlement
+        await agent.check('agent_funded');
+        check('re-check does not re-fire onPaid', paid.filter(x => x === 'agent_funded').length === 1);
+    } else {
+        note('0.11 order still locked — the payment is maturing; onPaid fires once it unlocks (re-run later)');
+    }
 
-    // a 0.05 order on the funded subaddress is already covered by the confirmed 0.1
-    await agent.createOrder({ id: 'agent_small', amount: '0.05', index: IDX });
-    r = await agent.check('agent_small');
-    check('0.05 order on the funded subaddress → PAID (0.1 confirmed covers it)', r.paid && r.status === 'paid', `status ${r.status}`);
-    check('onPaid fired EXACTLY ONCE for the paid order', paid.filter(x => x === 'agent_small').length === 1);
-
-    // re-check is idempotent — no double settlement
-    await agent.check('agent_small');
-    check('re-check does not re-fire onPaid', paid.filter(x => x === 'agent_small').length === 1);
+    // the agent REFUSES to bind a second order to a subaddress already in use — two
+    // orders sharing a subaddress could both credit the same payment (a double-settle).
+    let rejected = false;
+    try { await agent.createOrder({ id: 'agent_dup', amount: '0.05', index: IDX }); }
+    catch (e) { rejected = /already assigned/.test(String(e.message)); }
+    check('a second order on the SAME subaddress is REJECTED (one address per order)', rejected);
 
     agent.stop();
     await scanner.close(false);

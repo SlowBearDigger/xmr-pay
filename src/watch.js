@@ -41,7 +41,52 @@ async function rpc(url, method, params = {}, timeoutMs = 15000) {
 // SUMS confirmed transfers (a buyer who paid in two installments still completes),
 // holds back pool + time-locked outputs, and reports an EXACT piconero shortfall.
 // rows: [{ txid, amountPico (BigInt), confirmations, inPool, locked }]
+// read a row's amount as a BigInt, fail-soft to 0n (a bad row can't move money).
+function rowAmtPico(t) {
+    try { return (typeof t.amountPico === 'bigint') ? t.amountPico : BigInt(t.amountPico); } catch { return 0n; }
+}
+
+// of two rows for the SAME txid, return the one we can most safely credit. the order
+// is deterministic so the dedup verdict never depends on which row arrived first:
+//   1) a confirmed (not-pool) copy beats a pool copy — keeping the pool copy would
+//      strand a real, confirmed payment as "mempool" forever.
+//   2) more confirmations wins.
+//   3) on a tie, the SMALLER amount wins — a duplicate that disagrees on value can
+//      then never settle an order on the larger (bogus) claim. conservative by design.
+function moreCreditable(a, b) {
+    if (!!a.inPool !== !!b.inPool) return a.inPool ? b : a;
+    const ca = Number(a.confirmations) || 0, cb = Number(b.confirmations) || 0;
+    if (ca !== cb) return ca > cb ? a : b;
+    const aa = rowAmtPico(a), bb = rowAmtPico(b);
+    if (aa !== bb) return aa < bb ? a : b;
+    return a;
+}
+
+// collapse rows that share a REAL txid down to one most-creditable copy, ORDER-
+// INDEPENDENTLY. the same tx can surface twice in one poll (most often a confirmed
+// `in` row AND a pool row during a daemon mid-update), and monero-ts getTransfers
+// gives no ordering guarantee — a first-wins dedup would make the money verdict
+// depend on row order (strand a confirmed payment, or settle on an inflated dup).
+// an empty/missing txid is never a duplicate of another, so each such row is kept.
+function dedupByTxid(rows) {
+    if (!Array.isArray(rows)) return [];
+    const posByTxid = new Map();   // real txid -> index of its winning row in `out`
+    const out = [];                // first-appearance order; non-object & empty-txid rows pass through untouched
+    for (const t of rows) {
+        if (!t || typeof t !== 'object' || !t.txid) { out.push(t); continue; }
+        const pos = posByTxid.get(t.txid);
+        if (pos === undefined) { posByTxid.set(t.txid, out.length); out.push(t); }
+        else out[pos] = moreCreditable(out[pos], t);
+    }
+    return out;
+}
+
 function summarizeTransfers(rows, expectedPico, minConfirmations = 1, tolerancePico = 0n) {
+    // clamp: a negative minConfirmations would credit mempool/0-conf txs regardless of intent.
+    minConfirmations = Math.max(0, minConfirmations | 0);
+    // dedup BEFORE accounting so a tx that appears twice in one poll is counted once,
+    // independent of row order (see dedupByTxid / moreCreditable).
+    rows = dedupByTxid(rows);
     let confirmedSum = 0n, pendingSum = 0n, lockedSum = 0n;
     let minConfs = Infinity;
     const txids = [];

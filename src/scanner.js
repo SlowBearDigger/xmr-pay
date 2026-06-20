@@ -24,6 +24,13 @@ function lazyMonero() { if (!monerojs) monerojs = require('monero-ts'); return m
 // trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
 const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
 
+// guard against non-http(s) schemes (file://, data:, javascript: etc.) reaching fetch()
+function assertNodeUri(uri) {
+    const u = new URL(String(uri));
+    if (u.protocol !== 'http:' && u.protocol !== 'https:')
+        throw new Error(`node URI scheme must be http or https, got: ${u.protocol} (${uri})`);
+}
+
 async function fetchDaemonHeight(nodes) {
     for (const u of nodes) {
         try {
@@ -100,6 +107,7 @@ function creditableRows(rows, minHeight, grace = BIRTHDAY_GRACE) {
 async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0, syncTimeoutMs = 120000 } = {}) {
     if (!primaryAddress || !privateViewKey) throw new Error('primaryAddress and privateViewKey are required (view-only)');
     if (!Array.isArray(nodes) || nodes.length === 0) throw new Error('at least one node URI is required');
+    nodes.forEach(assertNodeUri);  // throws on first non-http(s) URI
     const m = lazyMonero();
 
     // `fs` is required lazily and ONLY when a wallet `path` is given — deliberate,
