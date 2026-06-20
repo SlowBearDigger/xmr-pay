@@ -4,6 +4,19 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-06-20
+
+### Fixed
+- `summarizeTransfers` settlement is now fully order-independent. `moreCreditable`
+  is a total order over every verdict-affecting field: it now also tie-breaks on
+  lock status and double-spend-seen (a locked or contested copy of a txid wins,
+  conservatively). A property test found that two copies of one txid differing only
+  in `locked` could settle one way or the other depending on row order. The
+  order-independence properties now run 20,000 cases and the generator covers
+  `doubleSpendSeen`.
+
+> 1.0.0 shipped this bug and is deprecated on npm; use 1.0.1.
+
 ## [1.0.0] - 2026-06-20
 
 First stable release. The payment-correctness core (proof verification, the watch
