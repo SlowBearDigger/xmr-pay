@@ -95,6 +95,25 @@ prop('order-independence: a full sort by confirmations cannot change the verdict
         a === b, `[small,big]=${a} | [big,small]=${b}`);
 })();
 
+// ── 4b. BURNING BUG: two outputs sharing a one-time output key, in DIFFERENT txids ──
+// the 2018 Monero attack: an attacker crafts two outputs to the subaddress sharing a
+// one-time key P across two txs; each has a valid amount but on-chain only ONE is
+// spendable (shared key image). deduping by txid alone counts both = direct loss. the
+// dedup keys on the output key, so it counts once. (bundled wallet2 transports collapse
+// this upstream; this guards summarizeTransfers for any caller's transport.)
+(() => {
+    const a = { txid: 'txA', outKey: 'P_same', amountPico: 100n, confirmations: 10, inPool: false, locked: false };
+    const b = { txid: 'txB', outKey: 'P_same', amountPico: 100n, confirmations: 10, inPool: false, locked: false };
+    const r1 = summarizeTransfers([a, b], 100n, 1);
+    ok('burning bug: same output key across txids is credited ONCE', r1.receivedPico === '100' && r1.paid === true, `recv=${r1.receivedPico} paid=${r1.paid}`);
+    const r2 = summarizeTransfers([a, b], 200n, 1);   // the exploit: a 200 order on a 100-real burned pair
+    ok('burning bug: a 200 order is NOT settled by two same-key 100s', r2.paid === false && r2.receivedPico === '100', `recv=${r2.receivedPico} paid=${r2.paid}`);
+    const c = { txid: 'txC', outKey: 'P1', amountPico: 100n, confirmations: 10, inPool: false, locked: false };
+    const d = { txid: 'txD', outKey: 'P2', amountPico: 100n, confirmations: 10, inPool: false, locked: false };
+    const r3 = summarizeTransfers([c, d], 200n, 1);
+    ok('distinct output keys (two real payments) still sum to paid', r3.paid === true && r3.receivedPico === '200', `recv=${r3.receivedPico}`);
+})();
+
 // ── 5. IN/POOL/LOCKED FLAPPING ACROSS POLLS (reorg + mempool churn) ──
 // model the same txid as the daemon view churns: pool → confirmed → (reorg) pool
 // again. once truly confirmed-and-counted a later view can re-evaluate, but the

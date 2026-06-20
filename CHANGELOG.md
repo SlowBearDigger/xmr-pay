@@ -4,6 +4,17 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-06-20
+
+### Security
+- `summarizeTransfers` now deduplicates by the one-time OUTPUT KEY (`outKey`) when a
+  caller supplies it, not by txid alone. This is the burning-bug (Monero, 2018) defence:
+  two outputs sharing a one-time key — even in different txids — are at most one spendable
+  output (shared key image), so counting both would credit one real payment twice. The
+  bundled transports (monero-ts / monero-wallet-rpc, both wallet2) already collapse burns
+  before a row is built, so this is defence-in-depth that makes the public
+  `summarizeTransfers` export burning-safe for any caller's transport.
+
 ## [1.0.1] - 2026-06-20
 
 ### Fixed
