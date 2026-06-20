@@ -39,6 +39,7 @@ const dupTransfer = fc.record({
     confirmations: fc.nat({ max: 30 }),
     inPool: fc.boolean(),
     locked: fc.boolean(),
+    doubleSpendSeen: fc.boolean(),   // contested copies must dedup deterministically too
 });
 const dupRows = fc.array(dupTransfer, { maxLength: 10 });
 
@@ -47,14 +48,14 @@ prop('order-independence: shuffling the rows never changes the verdict', [dupRow
         const a = verdict(summarizeTransfers(rows, exp, mc));
         const b = verdict(summarizeTransfers([...rows].reverse(), exp, mc));
         return a === b;
-    });
+    }, 20000);
 
 prop('order-independence: a full sort by confirmations cannot change the verdict', [dupRows, fc.bigInt({ min: 1n, max: 10n ** 15n }), fc.integer({ min: 1, max: 10 })],
     (rows, exp, mc) => {
         const a = verdict(summarizeTransfers(rows, exp, mc));
         const b = verdict(summarizeTransfers([...rows].sort((x, y) => x.confirmations - y.confirmations), exp, mc));
         return a === b;
-    });
+    }, 20000);
 
 // ── 2. A CONFIRMED PAYMENT IS NEVER STRANDED BY A POOL DUPLICATE ──
 // the exact bug a first-wins dedup hides: the SAME txid arrives as a pool row AND a
