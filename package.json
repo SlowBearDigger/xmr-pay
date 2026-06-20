@@ -1,6 +1,6 @@
 {
   "name": "xmr-pay",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sovereign Monero payments toolkit. Client-side payment links + QR (core), stateless on-chain proof verification (verify), signed fulfillment webhooks (webhook), and a zero-dependency checkout widget. No accounts, no API keys, no third parties in the payment path.",
   "main": "src/verify.js",
   "exports": {
