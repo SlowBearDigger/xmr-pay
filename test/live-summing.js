@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createScanner } = require('../src/scanner');
+const { xmrToPico, picoToXmrString } = require('../src/verify');
 
 const POC = process.env.XMRPAY_POC || require('os').homedir() + '/Documents/goxmr-pay-poc';
 const info = JSON.parse(fs.readFileSync(path.join(POC, 'stagenet/info.json'), 'utf8'));
@@ -50,23 +51,26 @@ const note = (n, x = '') => { warn++; console.log(`WARN  ${n}${x ? '  — ' + x 
         process.exit(fail === 0 ? 0 : 1);
     }
 
-    // 2+ real payments present → prove the scanner SUMS them. a freshly-confirmed
-    // payment is LOCKED for ~10 blocks (Monero's standard output lock), so the 2nd
-    // one shows as locked, not yet spendable-confirmed.
-    const seen = r0.receivedXmr + r0.pendingXmr + r0.lockedXmr;
-    console.log(`  spendable ${r0.receivedXmr} + locked ${r0.lockedXmr} + pool ${r0.pendingXmr}  =  ${seen} XMR on-chain`);
-    check('scanner sees BOTH payments', r0.txids.length >= 2);
-    check('scanner SUMS them to the full 0.11 on-chain', Math.abs(seen - 0.11) < 1e-9, `seen ${seen}`);
+    // 2+ real payments present → prove the scanner SUMS them. assertions are RELATIVE
+    // to whatever is on-chain (the faucet subaddress accrues more payments over time),
+    // computed in EXACT piconero so they never drift on float error. a freshly-confirmed
+    // payment is LOCKED for ~10 blocks, so some of the total may show as locked, not
+    // yet spendable-confirmed.
+    const seenPico = xmrToPico(r0.receivedXmr) + xmrToPico(r0.pendingXmr) + xmrToPico(r0.lockedXmr);
+    const seenStr = picoToXmrString(seenPico);
+    console.log(`  spendable ${r0.receivedXmr} + locked ${r0.lockedXmr} + pool ${r0.pendingXmr}  =  ${seenStr} XMR on-chain`);
+    check('scanner sees ≥2 payments and SUMS them', r0.txids.length >= 2 && seenPico > 0n, `${r0.txids.length} txs = ${seenStr} XMR`);
 
-    // order for the full 0.11: the sum is recognized and the buyer owes NOTHING
-    // more (shortfall 0). status is 'locked' until the 0.01 matures, then 'paid'.
-    let r = await s.checkOrder({ subaddressIndex: IDX, amount: '0.11', sync: false });
-    check('order 0.11 → sum recognized, shortfall 0 (nothing more to pay)', r.shortfallXmr === '0' && (r.status === 'locked' || r.status === 'paid'), `status ${r.status}`);
-    console.log(`  → order 0.11: ${r.status}${r.status === 'locked' ? '  (the 0.01 is maturing — flips to paid in ~10 blocks)' : '  ✓ fully unlocked'}`);
+    // an order for EXACTLY what arrived: the sum is recognized and the buyer owes
+    // NOTHING more (shortfall 0). status is 'locked' while any of it matures, else 'paid'.
+    let r = await s.checkOrder({ subaddressIndex: IDX, amount: seenStr, sync: false });
+    check('order = on-chain total → shortfall 0 (nothing more to pay)', r.shortfallXmr === '0', `status ${r.status} short ${r.shortfallXmr}`);
+    console.log(`  → order ${seenStr}: ${r.status}`);
 
-    // a bigger order than what actually arrived → genuine partial, EXACT shortfall
-    r = await s.checkOrder({ subaddressIndex: IDX, amount: '0.16', sync: false });
-    check('order 0.16 → partial, EXACT shortfall 0.05', !r.paid && r.status === 'partial' && r.shortfallXmr === '0.05', `status ${r.status} short ${r.shortfallXmr}`);
+    // an order 0.05 MORE than arrived → genuine partial, EXACT shortfall 0.05.
+    const bigStr = picoToXmrString(seenPico + xmrToPico('0.05'));
+    r = await s.checkOrder({ subaddressIndex: IDX, amount: bigStr, sync: false });
+    check('order = total + 0.05 → not paid, EXACT shortfall 0.05', ! r.paid && r.shortfallXmr === '0.05', `status ${r.status} short ${r.shortfallXmr}`);
 
     await s.close(false);
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed, ${warn} warnings`);

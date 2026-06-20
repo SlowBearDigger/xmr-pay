@@ -1,6 +1,6 @@
 {
   "name": "xmr-pay",
-  "version": "0.4.0-beta.1",
+  "version": "1.0.0",
   "description": "Sovereign Monero payments toolkit. Client-side payment links + QR (core), stateless on-chain proof verification (verify), signed fulfillment webhooks (webhook), and a zero-dependency checkout widget. No accounts, no API keys, no third parties in the payment path.",
   "main": "src/verify.js",
   "exports": {
@@ -25,6 +25,7 @@
     "widget",
     "examples",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "docs/DEPLOY.md",
     "docs/WALLETS.md",
@@ -65,7 +66,7 @@
   "scripts": {
     "build": "bash scripts/build-widget.sh",
     "release": "bash scripts/release.sh",
-    "test": "node test/verify-gates.test.js && node test/core.test.js && node test/config.test.js && node test/receipt.test.js && node test/agent-cli.test.js && node test/watch.test.js && node test/webhook.test.js && node test/webhook-redelivery.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/agent-sse.test.js && node test/verify-keyless.test.js && node test/config-pin.test.js && node test/scanner-birthday.test.js && node test/reorg.test.js && node test/expiry.test.js && node test/property.test.js && node test/rpc-fuzz.test.js && node test/false-paid.test.js && node test/webhook-storm.test.js && node test/break.test.js && node test/soak.test.js && node test/stress.test.js && node test/monero-parity.test.js && node test/adversarial-types.test.js",
+    "test": "node test/verify-gates.test.js && node test/quorum.test.js && node test/core.test.js && node test/config.test.js && node test/receipt.test.js && node test/agent-cli.test.js && node test/watch.test.js && node test/webhook.test.js && node test/webhook-redelivery.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/fuzz.test.js && node test/agent.test.js && node test/agent-sse.test.js && node test/verify-keyless.test.js && node test/config-pin.test.js && node test/scanner-birthday.test.js && node test/reorg.test.js && node test/expiry.test.js && node test/property.test.js && node test/rpc-fuzz.test.js && node test/false-paid.test.js && node test/webhook-storm.test.js && node test/break.test.js && node test/soak.test.js && node test/stress.test.js && node test/monero-parity.test.js && node test/adversarial-types.test.js && node test/adversarial-stress.test.js",
     "test:mut": "node test/core.test.js && node test/watch.test.js && node test/property.test.js && node test/agent.test.js && node test/reorg.test.js && node test/scanner-birthday.test.js && node test/verify-gates.test.js && node test/verify-rpc.test.js && node test/chaos.test.js && node test/rpc-fuzz.test.js",
     "test:live": "node test/live-stagenet.js",
     "test:scanner": "node test/live-scanner.js",

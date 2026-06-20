@@ -29,7 +29,10 @@ const transfer = fc.record({
     inPool: fc.boolean(),
     locked: fc.boolean(),
 });
-const transfers = fc.array(transfer, { maxLength: 12 });
+// real on-chain rows carry UNIQUE txids (one aggregated transfer per tx+subaddress),
+// so the generic sum/shortfall invariants below are exercised on realistic data.
+// the dedup-by-txid behaviour itself is covered by the dedicated tests further down.
+const transfers = fc.array(transfer, { maxLength: 12 }).map(rs => rs.map((t, i) => ({ ...t, txid: t.txid + '#' + i })));
 const minConf = fc.integer({ min: 1, max: 20 });
 
 // independent re-derivation of the bucketing (mirror of summarizeTransfers)
@@ -73,6 +76,39 @@ prop('summarize: confirmations is the MIN over confirmed transfers (or 0)', [tra
         const want = confs.length ? Math.min(...confs) : 0;
         return summarizeTransfers(rs, exp, mc).confirmations === want;
     });
+
+// ── dedup by txid (the false-paid defence summarizeTransfers must hold) ──
+function check(name, ok, extra = '') {
+    if (ok) { pass++; console.log('PASS  ' + name); }
+    else { fail++; console.log('FAIL  ' + name + (extra ? '  — ' + extra : '')); }
+}
+
+// the SAME real txid in both the confirmed (`in`) and pool lists — a daemon
+// mid-update overlap — must be counted ONCE. double-counting it would mark an
+// order paid on half the money: the one thing watch mode must never do.
+(() => {
+    const rows = [
+        { txid: 'a1b2c3', amountPico: 5n, confirmations: 10, inPool: false, locked: false },
+        { txid: 'a1b2c3', amountPico: 5n, confirmations: 0, inPool: true, locked: false },
+    ];
+    const r = summarizeTransfers(rows, 10n, 1);  // expects 10; only 5 truly arrived
+    check('summarize: duplicate txid (in+pool overlap) counted once',
+        r.receivedPico === '5' && r.paid === false && r.txids.length === 1,
+        `received=${r.receivedPico} paid=${r.paid} txids=${r.txids.length}`);
+})();
+
+// empty/missing txids are NOT real identifiers, so distinct rows that happen to
+// carry one must each still count (the `!= null` bug collapsed them into one).
+(() => {
+    const rows = [
+        { txid: '', amountPico: 3n, confirmations: 10, inPool: false, locked: false },
+        { txid: '', amountPico: 4n, confirmations: 10, inPool: false, locked: false },
+    ];
+    const r = summarizeTransfers(rows, 7n, 1);  // both must count → 7, paid
+    check('summarize: empty txids are NOT treated as duplicates',
+        r.receivedPico === '7' && r.paid === true,
+        `received=${r.receivedPico} paid=${r.paid}`);
+})();
 
 // ── creditableRows (birthday binding — the false-instant-paid defence) ──
 const GRACE = 3;
