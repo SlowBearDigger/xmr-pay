@@ -46,17 +46,23 @@ function rowAmtPico(t) {
     try { return (typeof t.amountPico === 'bigint') ? t.amountPico : BigInt(t.amountPico); } catch { return 0n; }
 }
 
-// of two rows for the SAME txid, return the one we can most safely credit. the order
-// is deterministic so the dedup verdict never depends on which row arrived first:
-//   1) a confirmed (not-pool) copy beats a pool copy — keeping the pool copy would
-//      strand a real, confirmed payment as "mempool" forever.
-//   2) more confirmations wins.
-//   3) on a tie, the SMALLER amount wins — a duplicate that disagrees on value can
-//      then never settle an order on the larger (bogus) claim. conservative by design.
+// of two rows for the SAME txid, return the one we can most safely credit. this is a
+// TOTAL order over every field that changes the verdict, so the dedup result (and thus
+// the verdict) never depends on which row arrived first. every tie-break picks the
+// CONSERVATIVE reading, so contradictory daemon data can never be credited as paid:
+//   1) a double-spend-seen copy wins — contested money is held, never credited.
+//   2) a confirmed (not-pool) copy beats a pool copy — else a real confirmed payment
+//      could be stranded as "mempool" by a stale pool duplicate.
+//   3) more confirmations wins.
+//   4) a time-locked copy wins — contradictory lock status is treated as still locked.
+//   5) the SMALLER amount wins — a duplicate that disagrees on value can never settle
+//      an order on the larger (bogus) claim.
 function moreCreditable(a, b) {
+    if (!!a.doubleSpendSeen !== !!b.doubleSpendSeen) return a.doubleSpendSeen ? a : b;
     if (!!a.inPool !== !!b.inPool) return a.inPool ? b : a;
     const ca = Number(a.confirmations) || 0, cb = Number(b.confirmations) || 0;
     if (ca !== cb) return ca > cb ? a : b;
+    if (!!a.locked !== !!b.locked) return a.locked ? a : b;
     const aa = rowAmtPico(a), bb = rowAmtPico(b);
     if (aa !== bb) return aa < bb ? a : b;
     return a;
