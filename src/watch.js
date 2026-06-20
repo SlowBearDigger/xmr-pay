@@ -68,20 +68,29 @@ function moreCreditable(a, b) {
     return a;
 }
 
-// collapse rows that share a REAL txid down to one most-creditable copy, ORDER-
-// INDEPENDENTLY. the same tx can surface twice in one poll (most often a confirmed
-// `in` row AND a pool row during a daemon mid-update), and monero-ts getTransfers
-// gives no ordering guarantee — a first-wins dedup would make the money verdict
-// depend on row order (strand a confirmed payment, or settle on an inflated dup).
-// an empty/missing txid is never a duplicate of another, so each such row is kept.
+// collapse rows that are the SAME spendable output down to one most-creditable copy,
+// ORDER-INDEPENDENTLY. the dedup key is the one-time OUTPUT KEY (`outKey`, the vout
+// target.key / stealth address) when the caller provides it, else the txid.
+//
+// keying on the output key is the BURNING-BUG defence (Monero, 2018): two outputs that
+// share a one-time key — even in DIFFERENT txs — are at most ONE spendable output (they
+// share a key image), so summing both would credit one real payment twice. the bundled
+// transports (monero-ts / monero-wallet-rpc, both wallet2) already collapse burns before
+// a row is ever built, so their rows carry no `outKey` and fall back to txid safely; this
+// makes `summarizeTransfers` (a PUBLIC export) burning-safe for ANY caller's transport.
+// it also subsumes the in/pool overlap (same output -> same key). a row with neither key
+// is kept on its own.
 function dedupByTxid(rows) {
     if (!Array.isArray(rows)) return [];
-    const posByTxid = new Map();   // real txid -> index of its winning row in `out`
-    const out = [];                // first-appearance order; non-object & empty-txid rows pass through untouched
+    const posByKey = new Map();   // dedup key -> index of its winning row in `out`
+    const out = [];               // first-appearance order; non-object & keyless rows pass through untouched
     for (const t of rows) {
-        if (!t || typeof t !== 'object' || !t.txid) { out.push(t); continue; }
-        const pos = posByTxid.get(t.txid);
-        if (pos === undefined) { posByTxid.set(t.txid, out.length); out.push(t); }
+        if (!t || typeof t !== 'object') { out.push(t); continue; }
+        const key = (t.outKey != null && t.outKey !== '') ? 'k:' + t.outKey
+            : (t.txid != null && t.txid !== '') ? 't:' + t.txid : null;
+        if (key === null) { out.push(t); continue; }
+        const pos = posByKey.get(key);
+        if (pos === undefined) { posByKey.set(key, out.length); out.push(t); }
         else out[pos] = moreCreditable(out[pos], t);
     }
     return out;
