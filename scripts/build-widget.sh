@@ -24,3 +24,8 @@ OUT=widget/xmr-pay.js
 
 node --check "$OUT"
 echo "built $OUT ($(wc -c < "$OUT" | tr -d ' ') bytes, qrcode-generator@${VER})"
+
+# ship the same built widget alongside the portable hosted checkout page, so hosted/ is a
+# self-contained zero-server drop-in (Tier 0). git-ignored; published via npm files[].
+cp "$OUT" hosted/xmr-pay.js
+echo "copied widget -> hosted/xmr-pay.js"

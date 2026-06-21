@@ -106,7 +106,7 @@ npm i xmr-pay monero-ts        # monero-ts only needed for server-side detection
 The network is explicit at every entry point. Default is mainnet; use stagenet to
 test with no real money:
 
-> **Widget:** `<xmr-pay network="stagenet" ...>` (omit for mainnet).
+> **Widget:** the network follows the address you pass — a `4…` address is mainnet, `5…`/`7…` is stagenet (no separate attribute).
 > **Verify:** `verifyPayment({ networkType: 'stagenet', ... })`.
 > **Agent:** the `XMR_NETWORK=stagenet` env var (the `npx xmr-pay` wizard asks).
 

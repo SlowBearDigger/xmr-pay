@@ -2300,8 +2300,9 @@ var qrcode = function() {
 }));
 
 // ── <xmr-pay> web component ─────────────────────────────────────────────────
-// expects `qrcode` (vendored above) in scope. no other dependencies, no network
-// calls except the merchant's own verify-url when the buyer submits a proof.
+// expects `qrcode` (vendored above) in scope. no other dependencies. the ONLY network calls
+// are to the merchant's own endpoints when configured: verify-url (proof submit), status-url /
+// stream-url (watch poll + SSE), and receipt-url. with none set, the widget makes no requests.
 
 var XP_STR = {
     en: {
@@ -2318,6 +2319,7 @@ var XP_STR = {
         verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard — paste manually',
         detectBtn: "I've paid — detect it", detecting: 'Checking the blockchain…', watching: 'Watching the blockchain for your payment…',
         paidTitle: 'Payment confirmed', confs: 'confirmations',
+        stepAwait: 'Awaiting', stepSeen: 'Received', stepDone: 'Confirmed',
         overpaidMsg: 'You overpaid {x} XMR — contact the merchant for a refund of the difference.',
         receiptSigner: 'Signed by', receiptDownload: 'Download receipt', receiptVerify: 'Verify receipt',
         underpaid: 'Received {r} XMR, expected {e}',
@@ -2354,6 +2356,7 @@ var XP_STR = {
         verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles — pega a mano',
         detectBtn: 'Ya pagué — detectar', detecting: 'Revisando la blockchain…', watching: 'Esperando tu pago en la blockchain…',
         paidTitle: 'Pago confirmado', confs: 'confirmaciones',
+        stepAwait: 'En espera', stepSeen: 'Recibido', stepDone: 'Confirmado',
         overpaidMsg: 'Pagaste {x} XMR de más — contacta al comerciante para el reembolso de la diferencia.',
         receiptSigner: 'Firmado por', receiptDownload: 'Descargar recibo', receiptVerify: 'Verificar recibo',
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
@@ -2451,6 +2454,11 @@ var XP_CSS = [
     '.detect:hover{background:var(--xp-btn-hv);}',
     '.detect:disabled{opacity:.55;cursor:default;}',
     '.wst{font-size:11px;color:var(--xp-yellow);text-align:center;margin:0;}',
+    '.xp-steps{display:flex;gap:6px;margin:2px 0 9px;}',
+    '.xp-steps .s{flex:1;font-size:8.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--xp-muted);text-align:center;transition:color .2s;}',
+    '.xp-steps .s .bar{height:3px;border-radius:2px;background:var(--xp-border);margin-bottom:5px;transition:background .2s;}',
+    '.xp-steps .s.on{color:var(--xp-fg);}',
+    '.xp-steps .s.on .bar,.xp-steps .s.done .bar{background:var(--xp-accent);}',
     '.hidden{display:none;}',
 ].join('');
 
@@ -2518,7 +2526,7 @@ class XmrPay extends HTMLElement {
     static get observedAttributes() { return ['address', 'amount', 'label', 'order', 'verify-url', 'status-url', 'stream-url', 'lang', 'redirect-url', 'theme']; }
 
     connectedCallback() { this._resolve().then(() => this._render()); }
-    disconnectedCallback() { this._closeStream(); clearTimeout(this._watchT); clearTimeout(this._repollT); }
+    disconnectedCallback() { this._closeStream(); clearTimeout(this._watchT); clearTimeout(this._repollT); if (this._onVis) { document.removeEventListener('visibilitychange', this._onVis); window.removeEventListener('focus', this._onVis); this._onVis = null; } }
     _closeStream() { if (this._es) { try { this._es.close(); } catch (e) {} this._es = null; } this._streaming = false; }
     attributeChangedCallback() { if (this.isConnected) this._resolve().then(() => this._render()); }
 
@@ -2623,6 +2631,11 @@ class XmrPay extends HTMLElement {
             // just taps "detect" — no txid/proof to paste. auto-polls too.
             (statusUrl ?
                 '<div class="sec watch">' +
+                '<div class="xp-steps" aria-hidden="true">' +
+                  '<div class="s st-await on"><div class="bar"></div>' + t.stepAwait + '</div>' +
+                  '<div class="s st-seen"><div class="bar"></div>' + t.stepSeen + '</div>' +
+                  '<div class="s st-done"><div class="bar"></div>' + t.stepDone + '</div>' +
+                '</div>' +
                 '<button class="go detect" type="button">' + t.detectBtn + '</button>' +
                 '<p class="wst" role="status" aria-live="polite">● ' + t.watching + '</p>' +
                 '</div>'
@@ -2700,8 +2713,24 @@ class XmrPay extends HTMLElement {
             this._closeStream();
             if (streamUrl && typeof EventSource !== 'undefined') this._stream(root, streamUrl, t);
             if (statusUrl) {
+                this._watchStart = Date.now();
                 clearTimeout(this._watchT);
                 this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, 1500);
+                // poll the instant the buyer returns to the tab (e.g. back from their wallet
+                // app), throttled so focus/blur churn can't hammer the merchant's endpoint.
+                // _wire runs on every _render (any observed-attribute change), so drop a prior
+                // handler before registering a new one — otherwise the old closure leaks, still
+                // firing and now unremovable (disconnectedCallback only knows the latest).
+                if (this._onVis) { document.removeEventListener('visibilitychange', this._onVis); window.removeEventListener('focus', this._onVis); }
+                this._onVis = function () {
+                    if (self._paidDone || document.visibilityState !== 'visible') return;
+                    var since = Date.now() - (self._lastWatch || 0);
+                    clearTimeout(self._watchT);
+                    if (since >= 2500) self._watch(root, statusUrl, t, false);
+                    else self._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, 2500 - since);
+                };
+                document.addEventListener('visibilitychange', this._onVis);
+                window.addEventListener('focus', this._onVis);
             }
         }
 
@@ -2842,6 +2871,7 @@ class XmrPay extends HTMLElement {
     // is a buyer-triggered "detect" click (shows button feedback).
     async _watch(root, statusUrl, t, manual) {
         if (this._paidDone || !this.isConnected) return;
+        this._lastWatch = Date.now();   // for the visibility-poll throttle
         var self = this;
         var btn = root.querySelector('.detect');
         if (manual && btn) { btn.disabled = true; btn.textContent = t.detecting; }
@@ -2853,11 +2883,17 @@ class XmrPay extends HTMLElement {
         if (manual && btn) { btn.disabled = false; btn.textContent = t.detectBtn; }
         if (this._paidDone) return;
         this._applyWatch(root, out, t);
-        // backup cadence: brisk when polling alone, a slow heartbeat when a push
-        // stream is carrying the live updates.
+        // backup cadence: brisk early + while a payment is in flight; ease off on an idle,
+        // long-abandoned tab; slow heartbeat when a push stream carries the live updates.
         clearTimeout(this._watchT);
-        var active = out && (out.status === 'mempool' || out.status === 'unconfirmed');
-        var delay = this._streaming ? 20000 : (active ? 8000 : 6000);
+        var seen = out && (out.status === 'mempool' || out.status === 'unconfirmed' || out.status === 'partial' || out.status === 'underpaid');
+        var delay;
+        if (this._streaming) delay = 20000;
+        else if (seen) delay = 6000;
+        else {
+            var age = Date.now() - (this._watchStart || Date.now());
+            delay = age < 60000 ? 4000 : (age < 180000 ? 9000 : 15000);
+        }
         this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, delay);
     }
 
@@ -2883,15 +2919,33 @@ class XmrPay extends HTMLElement {
             wst.textContent = msg;
             wst.className = 'wst' + (status === 'mempool' || status === 'unconfirmed' ? ' mid' : '');
         }
+        var seen = out && (out.status === 'mempool' || out.status === 'unconfirmed' || out.status === 'partial' || out.status === 'underpaid');
+        this._setSteps(root, seen ? 'seen' : 'await');
+    }
+
+    // drive the 3-step progress indicator (await -> seen -> done). Visual only (aria-hidden):
+    // the .wst line carries the announced status, so the stepper never double-speaks to a reader.
+    _setSteps(root, stage) {
+        var a = root.querySelector('.st-await'), b = root.querySelector('.st-seen'), c = root.querySelector('.st-done');
+        if (!a) return;
+        a.className = 's st-await'; b.className = 's st-seen'; c.className = 's st-done';
+        if (stage === 'seen') { a.className += ' done'; b.className += ' on'; }
+        else if (stage === 'done') { a.className += ' done'; b.className += ' done'; c.className += ' on'; }
+        else { a.className += ' on'; }
     }
 
     _success(root, out, t) {
+        // a proof-verify result and a watch/stream event can both report paid; render once.
+        // (can't gate on _paidDone — _applyWatch sets it before calling here.)
+        if (this._succeeded) return;
+        this._succeeded = true;
         this._paidDone = true;
         clearTimeout(this._repollT);
         clearTimeout(this._watchT);
         var st = root.querySelector('.st');
         if (st) { st.textContent = '✓ ' + t.paidTitle; st.classList.add('paid'); }
         var body = root.querySelector('.body');
+        if (!body) return;
         body.innerHTML = '<div class="ok"><div class="ring">✓</div><div class="t">' + t.paidTitle + '</div>' +
             '<div class="c">' + (out.confirmations != null ? out.confirmations + ' ' + t.confs : '') + '</div>' +
             (out.overpaid ? '<div class="over">' + t.overpaidMsg.replace('{x}', xpEsc(String(out.overpaidXmr != null ? out.overpaidXmr : ''))) + '</div>' : '') +
