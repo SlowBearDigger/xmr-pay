@@ -22,3 +22,6 @@ hosted/xmr-pay.js
 
 # local agent/editor scaffolding
 .claude/
+
+# npm pack artifacts
+*.tgz
