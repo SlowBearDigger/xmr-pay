@@ -245,6 +245,10 @@ function send(res, code, body) {
     // cached chain tip so a busy status endpoint doesn't hammer the node — gives
     // the UI a REAL, live block height to show ("scanning the blockchain").
     let _tip = { h: 0, at: 0 }, _tipInflight = null;
+    // trim trailing slashes without a backtracking regex (matches bin/agent.js's rtrimSlash;
+    // the project avoids the /\/+$/ pattern on node URLs).
+    const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
+
     async function tipHeight() {
         const now = Date.now();
         if (_tip.h && now - _tip.at < 5000) return _tip.h;
@@ -256,7 +260,7 @@ function send(res, code, body) {
         // never block behind an in-progress wallet sync.
         _tipInflight = (async () => {
             try {
-                const r = await fetch(String(scanner.node).replace(/\/+$/, '') + '/get_height', { signal: AbortSignal.timeout(4000) });
+                const r = await fetch(rtrimSlash(scanner.node) + '/get_height', { signal: AbortSignal.timeout(4000) });
                 const j = await r.json(); const h = Number(j && j.height);
                 if (Number.isFinite(h) && h > 0) { _tip.h = h; _tip.at = Date.now(); }
             } catch { /* keep last */ }

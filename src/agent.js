@@ -9,7 +9,8 @@
 //   const r = await agent.check('ord_42');   // {paid, status, receivedXmr, shortfallXmr, ...}
 //   agent.start();   // background poller transitions orders to paid + calls onPaid once
 
-const { xmrToPico } = require('./verify');   // pure parser; does NOT load monero-ts
+const { xmrToPico, picoToXmrString } = require('./verify');   // pure parser; does NOT load monero-ts
+const { toInvoiceState } = require('./state');   // canonical lifecycle (created/processing/settled/expired/invalid)
 
 // adaptive polling: when a buyer is actively paying we want to detect in seconds,
 // but idle-polling that fast wastes node calls. so the loop runs at `activePollMs`
@@ -98,7 +99,12 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                     // else: collision → discard this candidate and take the next
                 }
             }
-            const order = { id: oid, amount: String(amount), address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', paid: false, receivedXmr: 0, shortfallXmr: String(amount), txids: [] };
+            // store the CANONICAL amount (≤12-decimal string from the validated pico), never the
+            // raw input: a float like 0.1+0.2 stringifies to "0.30000000000000004", which passes
+            // the number-path validation above but would then THROW in checkOrder's xmrToPico
+            // (string path, >12 decimals) and brick settlement for this order — and the tick.
+            const amountStr = picoToXmrString(expectedPico);
+            const order = { id: oid, amount: amountStr, address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', state: 'created', paid: false, receivedXmr: 0, shortfallXmr: amountStr, txids: [] };
             orders.set(oid, order);
             kick();   // a fresh order means a buyer is about to pay — pull the next poll in
             return { ...order };
@@ -107,14 +113,26 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         }
     }
 
-    // live-check an order against the chain and fold the result into its state.
-    // fires onPaid exactly ONCE, on the pending→paid transition. `sync:false`
-    // skips the wallet refresh (the poller syncs once per tick — see below).
     // fold a check result into an order's state; fire onPaid EXACTLY ONCE on the
-    // pending→paid transition. shared by the single check() and the batch tick().
+    // unpaid→paid transition. shared by the single check() and the batch tick().
     function applyResult(order, r) {
         const wasPaid = order.paid;
+        // settled LATCHES: once an order is paid, a later re-check (reachable only via check();
+        // the poller skips paid orders) must never un-capture it. A reorg deeper than
+        // minConfirmations is the merchant's bounded, accepted risk — refresh the confirmation
+        // count but keep the settled state + paid flag. (Mirrors docs/EVENTS.md "settled latches".)
+        if (wasPaid && !r.paid) {
+            if (r.confirmations != null) order.confirmations = r.confirmations;
+            const kept = { ...order };
+            if (onUpdate) { try { onUpdate(kept); } catch { /* ignore */ } }
+            return kept;
+        }
         order.status = r.status;
+        // fold the settlement status into the canonical invoice state (keep the prior state
+        // for verify-only results that don't map to a transition). `status` is kept for
+        // backward compat; `state` is the canonical lifecycle the events + UI key on.
+        const nextState = toInvoiceState(r.status);
+        if (nextState) order.state = nextState;
         order.paid = r.paid;
         order.receivedXmr = r.receivedXmr;
         if (r.receivedPico != null) order.receivedPico = r.receivedPico;
@@ -201,6 +219,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                 const hasFunds = Number(order.receivedXmr) > 0 || (order.receivedPico != null && BigInt(order.receivedPico) > 0n);
                 if (order.createdAt != null && (nowMs - order.createdAt) >= expiryMs && !hasFunds) {
                     order.status = 'expired';
+                    order.state = 'expired';
                     orders.delete(order.id);
                     if (onExpire) { try { await onExpire({ ...order }); } catch { /* caller's job */ } }
                 }

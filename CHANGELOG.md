@@ -4,6 +4,22 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-06-21
+
+### Added
+- `./state` — the canonical invoice state machine (created/processing/settled/expired/invalid), mirrored by the WooCommerce plugin and pinned by conformance tests.
+- `./refund` — shared, configurable claim-link expiry semantics.
+- `./report` — shared CSV column schema (`csvSafe`/`csvField`/`ordersToCsv`).
+- `hosted/` — a fully static, zero-server checkout page that hosts the `<xmr-pay>` widget.
+- `docs/EVENTS.md` — the state / event / webhook / refund-record contract.
+- Widget: visibility-triggered poll + adaptive backoff + a 3-step progress indicator; accessibility (focus rings, `role=alert`).
+- Stress/property suites: `agent.load`, `chaos-reorg`, `invariant-stress`.
+
+### Fixed
+- `createOrder` now stores the **canonical** amount, so a float input (e.g. `0.1 + 0.2`) can no longer throw in `checkOrder` and brick settlement.
+- `settled` latches on the `check()` path — a reorg-driven re-check can no longer un-settle a paid order.
+- Agent: dropped the banned trailing-slash regex on node URLs.
+
 ## [1.0.2] - 2026-06-20
 
 ### Security
