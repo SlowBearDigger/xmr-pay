@@ -41,6 +41,15 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('new order starts pending, shortfall = full amount', o.status === 'pending' && o.shortfallXmr === '0.1');
     ok('order carries its birthday height', o.birthdayHeight === 1001);
 
+    // amount canonicalization: a float input that stringifies to >12 decimals (0.1+0.2 →
+    // "0.30000000000000004") must be stored as a canonical ≤12-decimal string, or checkOrder's
+    // xmrToPico would throw on the string path and brick settlement for the order (and the tick).
+    const of = await agent.createOrder({ id: 'ord_float', amount: 0.1 + 0.2 });
+    ok('float amount stored canonical (0.1+0.2 → "0.3")', of.amount === '0.3', JSON.stringify(of.amount));
+    let floatChecked = true;
+    try { await agent.check('ord_float'); } catch { floatChecked = false; }
+    ok('a float-amount order checks cleanly (no brick)', floatChecked);
+
     let r = await agent.check('ord_1');
     ok('check with no payment → pending', r.status === 'pending' && !r.paid);
 
@@ -84,7 +93,7 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     let threw = false;
     try { await agent.createOrder({ id: 'ord_1', amount: '0.1' }); } catch { threw = true; }
     ok('duplicate order id is rejected', threw);
-    ok('list returns all orders', agent.list().length === 3);
+    ok('list returns all orders', agent.list().length === 4);   // ord_1, ord_float, ord_2, ord_3
     ok('get returns the order by id', agent.get('ord_2').id === 'ord_2');
     ok('check on an unknown order → null', (await agent.check('nope')) === null);
 

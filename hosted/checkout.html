@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>Pay with Monero</title>
+<!--
+  xmr-pay portable checkout — a SINGLE static page. Zero server, zero CDN, zero third
+  parties: the QR is generated locally by the widget, the fonts are the system's, and the
+  only network call is the one YOU configure (your verify/status endpoint, or none at all
+  in proof mode). The order id / address is the only capability.
+
+  Deploy: drop checkout.html + checkout.js + xmr-pay.js in one folder on any static host
+  (or inside your own site / the WooCommerce plugin). Share a link:
+
+    checkout.html#address=4ADDRESS&amount=0.05&label=Order%2042&expires=1718900000
+
+  Params (fragment `#` preferred — it never reaches a server):
+    address           a Monero address (or use `config` for a signed envelope)
+    config            base64 signed-config envelope (tamper-evident address)
+    amount            XMR to charge (omit for an open/tip amount)
+    label             what the buyer is paying for
+    order             your order id (sent to verify/status)
+    expires           unix seconds when the price/rate window ends (drives the countdown)
+    window            minutes from page load if `expires` is absent (default 30)
+    verify-url        proof-mode endpoint (buyer pastes a txid+proof). NO backend if absent.
+    status-url        watch-mode status poll (GET). Optional.
+    stream-url        watch-mode SSE live push (GET). Optional; falls back to polling.
+    redirect-url      where to send the buyer after payment
+    receipt-url       signed-receipt endpoint
+    lang en|es · theme light · skin brutal · fingerprint/pubkey (pin the signer)
+
+  Tier 0 (the default): give only `address` (+ `verify-url` for a self-verify, or a
+  `status-url` if you run the WP plugin / agent). Tier 1: point status/stream at your agent
+  for live SSE. A third party is never involved.
+-->
+<style>
+  :root {
+    --xp-bg: #09090b; --xp-fg: #fafafa; --xp-dim: #8b8b93; --xp-line: #1d1d21;
+    --xp-orange: #ff6600; --xp-card: #0e0e11;
+    --xp-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh; background: var(--xp-bg); color: var(--xp-fg);
+    font-family: var(--xp-mono); display: flex; align-items: flex-start;
+    justify-content: center; padding: 40px 18px 64px;
+  }
+  .xp-shell { width: 100%; max-width: 440px; }
+  .xp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin: 0 0 6px; }
+  .xp-label { font-size: 15px; font-weight: 700; letter-spacing: -.01em; word-break: break-word; }
+  .xp-amount { font-size: 13px; color: var(--xp-orange); white-space: nowrap; font-weight: 700; }
+  .xp-eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .14em; color: var(--xp-dim); margin: 0 0 18px; }
+  .xp-timer {
+    display: none; align-items: center; gap: 8px; margin: 0 0 16px; padding: 8px 12px;
+    border: 1px solid var(--xp-line); border-radius: 6px; font-size: 11.5px; color: var(--xp-dim);
+  }
+  .xp-timer.show { display: flex; }
+  .xp-timer .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--xp-orange); }
+  .xp-timer b { color: var(--xp-fg); font-variant-numeric: tabular-nums; }
+  .xp-timer.elapsed .dot { background: var(--xp-dim); }
+  #xp-mount { min-height: 120px; }
+  .xp-err { color: #f87171; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .xp-broken { color: #f3c3c3; font-size: 13px; line-height: 1.6; }
+  .xp-broken b { color: #fafafa; font-weight: 600; }
+  .xp-foot { margin: 22px 0 0; font-size: 10.5px; line-height: 1.6; color: var(--xp-dim); }
+  .xp-foot b { color: var(--xp-fg); font-weight: 600; }
+  a { color: var(--xp-orange); }
+</style>
+</head>
+<body>
+  <main class="xp-shell">
+    <div class="xp-head">
+      <div class="xp-label" id="xp-label">Pay with Monero</div>
+      <div class="xp-amount" id="xp-amount" hidden></div>
+    </div>
+    <p class="xp-eyebrow" id="xp-eyebrow">Monero · non-custodial</p>
+    <div class="xp-timer" id="xp-timer" aria-hidden="true"><span class="dot"></span><span>Rate locked · <b id="xp-clock">--:--</b></span></div>
+    <div id="xp-mount"></div>
+    <p class="xp-foot">
+      <b>You pay the merchant directly.</b> No company sits in the middle, no account, no
+      one can freeze or see your funds but you. The QR and the page run locally; nothing is
+      sent to a third party.
+    </p>
+  </main>
+  <script src="./xmr-pay.js"></script>
+  <script src="./checkout.js"></script>
+</body>
+</html>

@@ -18,3 +18,7 @@ site/xmr-pay.js
 # mutation testing artifacts
 reports/
 .stryker-tmp/
+hosted/xmr-pay.js
+
+# local agent/editor scaffolding
+.claude/
