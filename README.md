@@ -8,7 +8,15 @@ xmr-pay is a small toolkit you run yourself: payment links and QR codes, an
 embeddable checkout widget, and trustless on-chain payment detection. It is code,
 not a service.
 
-[npm](https://www.npmjs.com/package/xmr-pay) · MIT licensed · zero runtime dependencies · signed releases
+[![npm](https://img.shields.io/npm/v/xmr-pay?color=blue)](https://www.npmjs.com/package/xmr-pay)
+[![tests](https://img.shields.io/github/actions/workflow/status/SlowBearDigger/xmr-pay/test.yml?branch=main&label=tests)](https://github.com/SlowBearDigger/xmr-pay/actions/workflows/test.yml)
+[![runtime deps](https://img.shields.io/badge/runtime%20deps-0-brightgreen)](#)
+[![external requests](https://img.shields.io/badge/external%20requests-0-brightgreen)](#)
+[![license: MIT](https://img.shields.io/npm/l/xmr-pay)](LICENSE)
+
+MIT licensed · zero runtime dependencies · signed releases
+
+**Quick links:** [Live demo (stagenet)](https://demo.xmrpay.shop) · [npm](https://www.npmjs.com/package/xmr-pay) · [WooCommerce plugin](https://github.com/SlowBearDigger/xmr-pay-woocommerce) · [Docs](docs/) · [5-minute start](#install)
 
 ## Running a WooCommerce store?
 
@@ -26,6 +34,30 @@ other.
 > [live.xmrpay.shop](https://live.xmrpay.shop) : configure it yourself and watch it verify a payment
 > [demo.xmrpay.shop](https://demo.xmrpay.shop) : a full demo store, pay with free test XMR
 > [xmrpay.shop/demo.html](https://xmrpay.shop/demo.html) : the checkout widget and the "prove you paid" flow
+
+## How it compares
+
+Every option here is Monero-only and non-custodial in spirit — no fiat processors, no
+custody. The honest difference is how much you have to keep running, and whether anything
+sits between the buyer and your wallet.
+
+| | **xmr-pay** | BTCPay Server (Monero plugin) | AcceptXMR | MoneroPay | monerowp |
+|---|---|---|---|---|---|
+| Custody | Non-custodial, view key only | Non-custodial (self-run) | Non-custodial, view pair (no hot wallet) | View-only or hot wallet | View-only recommended |
+| Always-on server / daemon? | **No** — pure PHP in WordPress, a static page, or a serverless function | Yes — full server + wallet-rpc | Yes — a process + your own daemon | Yes — daemon + wallet-rpc + database | Yes — wallet-rpc on your server |
+| Runtime dependencies | **Zero** | Full stack (Docker) | Rust crates | Go + database | PHP + wallet-rpc |
+| Third party in the verify path | **None** (your own node) | None (your own node) | None (your own node) | None (your own node) | wallet-rpc, or a public block explorer |
+| Drop-in WooCommerce | **Yes** (standalone plugin) | Via BTCPay's WC plugin (needs the server) | No (Rust library) | No (HTTP API — build your own) | Yes |
+| Monero refunds | **Built-in, non-custodial (claim-link)** | Manual (collect a return address) | Not built-in | Via its outgoing API (needs a hot wallet) | Not built-in |
+| Maturity & adoption | New (2026) | Most mature, years in production | Established, active | Established | Long-standing community plugin |
+
+> **Where the others are genuinely stronger:** BTCPay Server does far more (multi-coin,
+> point-of-sale, Lightning, accounting) and is battle-tested; AcceptXMR is a fast Rust
+> gateway with realtime updates and the closest non-custodial philosophy to ours;
+> MoneroPay's daemon can also send outgoing payments; monerowp has years of real merchant
+> use. xmr-pay is the newest and least proven of the bunch. Its bet is narrow on purpose:
+> Monero only, nothing always-on by default, zero dependencies, and a drop-in WooCommerce
+> + npm + static-checkout path with non-custodial refunds built in.
 
 ## You do not need a dedicated server
 
