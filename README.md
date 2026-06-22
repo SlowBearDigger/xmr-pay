@@ -39,16 +39,18 @@ other.
 
 Every option here is Monero-only and non-custodial in spirit — no fiat processors, no
 custody. The honest difference is how much you have to keep running, and whether anything
-sits between the buyer and your wallet.
+sits between the buyer and your wallet. (xmr-pay is the JavaScript library — payment links,
+a checkout widget, and on-chain verification; WooCommerce and the PHP engine live in the
+separate [companion plugin](https://github.com/SlowBearDigger/xmr-pay-woocommerce).)
 
 | | **xmr-pay** | BTCPay Server (Monero plugin) | AcceptXMR | MoneroPay | monerowp |
 |---|---|---|---|---|---|
 | Custody | Non-custodial, view key only | Non-custodial (self-run) | Non-custodial, view pair (no hot wallet) | View-only or hot wallet | View-only recommended |
-| Always-on server / daemon? | **No** — pure PHP in WordPress, a static page, or a serverless function | Yes — full server + wallet-rpc | Yes — a process + your own daemon | Yes — daemon + wallet-rpc + database | Yes — wallet-rpc on your server |
+| Always-on server / daemon? | **No** — a static page / widget client-side, a serverless function, or watch mode in a runtime you already run | Yes — full server + wallet-rpc | Yes — a process + your own daemon | Yes — daemon + wallet-rpc + database | Yes — wallet-rpc on your server |
 | Runtime dependencies | **Zero** | Full stack (Docker) | Rust crates | Go + database | PHP + wallet-rpc |
 | Third party in the verify path | **None** (your own node) | None (your own node) | None (your own node) | None (your own node) | wallet-rpc, or a public block explorer |
-| Drop-in WooCommerce | **Yes** (standalone plugin) | Via BTCPay's WC plugin (needs the server) | No (Rust library) | No (HTTP API — build your own) | Yes |
-| Monero refunds | **Built-in, non-custodial (claim-link)** | Manual (collect a return address) | Not built-in | Via its outgoing API (needs a hot wallet) | Not built-in |
+| Drop-in WooCommerce | Via the companion plugin (no server) | Via BTCPay's WC plugin (needs the server) | No (Rust library) | No (HTTP API — build your own) | Yes |
+| Monero refunds | Non-custodial claim-link (helpers in the lib; full buyer flow in the plugin) | Manual (collect a return address) | Not built-in | Via its outgoing API (needs a hot wallet) | Not built-in |
 | Maturity & adoption | New (2026) | Most mature, years in production | Established, active | Established | Long-standing community plugin |
 
 > **Where the others are genuinely stronger:** BTCPay Server does far more (multi-coin,
@@ -56,8 +58,9 @@ sits between the buyer and your wallet.
 > gateway with realtime updates and the closest non-custodial philosophy to ours;
 > MoneroPay's daemon can also send outgoing payments; monerowp has years of real merchant
 > use. xmr-pay is the newest and least proven of the bunch. Its bet is narrow on purpose:
-> Monero only, nothing always-on by default, zero dependencies, and a drop-in WooCommerce
-> + npm + static-checkout path with non-custodial refunds built in.
+> Monero only, nothing always-on by default, zero dependencies, an npm library plus a static
+> checkout — and a companion WooCommerce plugin (built on this same engine) that adds
+> non-custodial claim-link refunds.
 
 ## You do not need a dedicated server
 
