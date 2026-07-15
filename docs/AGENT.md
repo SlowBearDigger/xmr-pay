@@ -111,7 +111,8 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 |---|---|---|---|
 | `XMR_PRIMARY_ADDRESS` | ✅ | — | your wallet's primary address |
 | `XMR_VIEW_KEY` | ✅ | — | your **private view key** (view-only; cannot spend) |
-| `XMR_NODES` | ✅ | — | Monero node URLs, comma-separated — your own first |
+| `XMR_NODES_JSON` | one of these | - | preferred for protected nodes; JSON array with one independent row per node |
+| `XMR_NODES` | one of these | - | legacy unprotected Monero node URLs, comma-separated; your own first |
 | `XMR_NETWORK` | | `mainnet` | `mainnet` · `stagenet` · `testnet` |
 | `XMR_RESTORE_HEIGHT` | | tip | omit to start at "now" (instant first sync); set it only to find older payments |
 | `XMR_WALLET_PATH` | | in-memory | persist the wallet so restarts skip re-scanning |
@@ -124,7 +125,7 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `AGENT_TOKEN` | | — | optional `Bearer` token required on `POST /order` |
 | `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost — it holds your view key |
 | `XMR_SUBADDRESS_POOL` | | `8` | how many fresh subaddresses to pre-derive so `POST /order` never blocks on the wallet |
-| `XMR_SYNC_TIMEOUT_MS` | | `120000` | per-sync timeout; on a stall the agent fails over to the next node |
+| `XMR_SYNC_TIMEOUT_MS` | | `120000` | per-sync and protected-node RPC deadline; on a stall the agent fails over to the next node |
 | `XMR_SYNC_GAP` | | `2` | lookahead gap when scanning subaddresses |
 | `XMR_WEBHOOK_SWEEP_MS` | | `30000` | how often to retry undelivered `order.paid` webhooks (durable redelivery) |
 | `XMR_MERCHANT_NAME` | | — | shown on signed receipts |
@@ -133,6 +134,48 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `XMR_WALLET_PASSWORD` | | — | encrypts the persisted wallet file at `XMR_WALLET_PATH` |
 | `XMR_ORDERS_FILE` | | in `XMR_PAY_DIR` | path to the orders ledger (JSON) |
 | `XMR_PAY_DIR` | | `./xmr-pay-data` | data dir for the `npx xmr-pay` CLI (config, wallet, orders, keys) |
+
+#### Protected nodes and failover
+
+Use `XMR_NODES_JSON` when a daemon requires HTTP Basic or Digest authentication.
+Each node has its own authentication settings, so failover never reuses one
+node's credentials with another node.
+
+```bash
+XMR_NODES_JSON='[
+  {
+    "url": "https://monero-primary.example:18081",
+    "auth": "digest",
+    "username": "merchant",
+    "password": "<node-password>"
+  },
+  {
+    "url": "https://monero-backup.example:18081",
+    "auth": "basic",
+    "username": "merchant-backup",
+    "password": "<backup-password>"
+  }
+]'
+```
+
+Allowed `auth` values are `none`, `basic`, and `digest`. Credentials embedded in
+the URL are rejected. Authenticated plain HTTP is also rejected unless that row
+explicitly includes `"allow_insecure_http": true`; use that exception only on a
+network you trust because HTTP does not encrypt the credentials or RPC traffic.
+
+`XMR_NODES_JSON` takes precedence over `XMR_NODES` and malformed JSON stops the
+agent instead of silently falling back. Protected daemons are reached through a
+per-node bridge bound to an ephemeral `127.0.0.1` port because wallet2 does not
+reliably negotiate every reverse proxy challenge. Passwords stay in the agent
+process and are omitted from status responses and error messages. The bridge
+forwards only the read-only daemon routes and JSON-RPC methods needed by wallet2;
+mutating daemon calls are rejected locally.
+
+The setup wizard asks for every node separately and stores its configuration in
+`xmr-pay-data/config.json` with mode `600` on systems that support Unix file
+permissions. It probes every configured node, reports unavailable rows as
+warnings, and uses the first reachable height in configured order. Keep that
+directory private and out of source control.
 
 ---
 

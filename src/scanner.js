@@ -14,29 +14,19 @@
 
 const { xmrToPico } = require('./verify');
 const { summarizeTransfers } = require('./watch');
+const { normalizeNodes, publicNodes } = require('./nodes');
+const { requestNode, createNodeBridge } = require('./node-transport');
 
 let monerojs = null;
 function lazyMonero() { if (!monerojs) monerojs = require('monero-ts'); return monerojs; }
 
-// read the current chain tip straight from a daemon (plain /get_height RPC, no
-// wallet needed). lets a FRESH scanner start at "now" instead of scanning history
-// — a payment scanner never needs the past, so this makes the first sync instant.
-// trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
-const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
-
-// guard against non-http(s) schemes (file://, data:, javascript: etc.) reaching fetch()
-function assertNodeUri(uri) {
-    const u = new URL(String(uri));
-    if (u.protocol !== 'http:' && u.protocol !== 'https:')
-        throw new Error(`node URI scheme must be http or https, got: ${u.protocol} (${uri})`);
-}
-
+// Read the current chain tip before creating a fresh wallet. requestNode()
+// supports unauthenticated, Basic, and Digest nodes without following redirects.
 async function fetchDaemonHeight(nodes) {
-    for (const u of nodes) {
+    for (const node of nodes) {
         try {
-            const r = await fetch(rtrimSlash(u) + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
-            if (!r.ok) continue;
-            const j = await r.json();
+            const response = await requestNode(node, { path: '/get_height', timeoutMs: 8000, maxResponseBytes: 1024 * 1024 });
+            const j = response.json;
             const h = Number(j && j.height);
             if (Number.isFinite(h) && h > 0) return h;
         } catch { /* next node */ }
@@ -104,11 +94,10 @@ function creditableRows(rows, minHeight, grace = BIRTHDAY_GRACE) {
     return rows.filter(r => !r.height || r.height >= floor);
 }
 
-async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0, syncTimeoutMs = 120000 } = {}) {
+async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0, syncTimeoutMs = 120000, monero } = {}) {
     if (!primaryAddress || !privateViewKey) throw new Error('primaryAddress and privateViewKey are required (view-only)');
-    if (!Array.isArray(nodes) || nodes.length === 0) throw new Error('at least one node URI is required');
-    nodes.forEach(assertNodeUri);  // throws on first non-http(s) URI
-    const m = lazyMonero();
+    const normalizedNodes = normalizeNodes(nodes);
+    const m = monero || lazyMonero();
 
     // `fs` is required lazily and ONLY when a wallet `path` is given — deliberate,
     // not a style slip: an in-memory scanner (no path, e.g. a browser/edge Modo A
@@ -121,7 +110,7 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     // created) is the tight window for any later re-scan.
     let birthday = restoreHeight;
     if (!opening && birthday == null) {
-        birthday = await fetchDaemonHeight(nodes);
+        birthday = await fetchDaemonHeight(normalizedNodes);
         if (birthday == null) throw new Error('could not read the chain tip to start at "now" — pass restoreHeight, or check your nodes');
     }
 
@@ -134,20 +123,45 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
         wallet = await m.createWalletFull(opts);
     }
 
+    // wallet2 does not reliably negotiate arbitrary reverse-proxy Basic/Digest
+    // challenges. Protected nodes therefore get an ephemeral loopback bridge;
+    // credentials remain in this process and wallet2 sees a plain local daemon.
+    const bridges = [];
+    const walletConnections = [];
+    try {
+        for (const node of normalizedNodes) {
+            if (node.auth === 'none') {
+                walletConnections.push(node.url);
+                continue;
+            }
+            const bridge = await createNodeBridge(node, { timeoutMs: syncTimeoutMs });
+            bridges.push(bridge);
+            walletConnections.push(bridge.url);
+        }
+    } catch (error) {
+        try { await wallet.close(false); } catch { /* ignore */ }
+        await Promise.allSettled(bridges.map(bridge => bridge.close()));
+        throw error;
+    }
+
     // connect to the first reachable node
     let connected = null, nodeIdx = -1;
-    for (let i = 0; i < nodes.length; i++) {
-        try { await wallet.setDaemonConnection(nodes[i]); if (await wallet.isConnectedToDaemon()) { connected = nodes[i]; nodeIdx = i; break; } } catch { /* next */ }
+    for (let i = 0; i < normalizedNodes.length; i++) {
+        try { await wallet.setDaemonConnection(walletConnections[i]); if (await wallet.isConnectedToDaemon()) { connected = normalizedNodes[i]; nodeIdx = i; break; } } catch { /* next */ }
     }
-    if (!connected) { try { await wallet.close(false); } catch { /* ignore */ } throw new Error('no node reachable: ' + nodes.join(', ')); }
+    if (!connected) {
+        try { await wallet.close(false); } catch { /* ignore */ }
+        await Promise.allSettled(bridges.map(bridge => bridge.close()));
+        throw new Error('no node reachable: ' + JSON.stringify(publicNodes(normalizedNodes)));
+    }
 
     // rotate to the NEXT reachable node — used when the current one degrades mid-run
     // (monero-ts holds ONE daemon connection; without this a single failing node
     // silently stalls the agent until restart). returns the new node, or null.
     async function rotateNode() {
-        for (let k = 1; k <= nodes.length; k++) {
-            const i = (nodeIdx + k) % nodes.length;
-            try { await wallet.setDaemonConnection(nodes[i]); if (await wallet.isConnectedToDaemon()) { connected = nodes[i]; nodeIdx = i; return nodes[i]; } } catch { /* next */ }
+        for (let k = 1; k <= normalizedNodes.length; k++) {
+            const i = (nodeIdx + k) % normalizedNodes.length;
+            try { await wallet.setDaemonConnection(walletConnections[i]); if (await wallet.isConnectedToDaemon()) { connected = normalizedNodes[i]; nodeIdx = i; return normalizedNodes[i]; } } catch { /* next */ }
         }
         return null;
     }
@@ -171,13 +185,15 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     async function doSync() {
         try { await syncOnce(); }
         catch (e) {
-            if (nodes.length > 1 && await rotateNode()) { await syncOnce(); return; }   // failover + one retry
+            if (normalizedNodes.length > 1 && await rotateNode()) { await syncOnce(); return; }   // failover + one retry
             throw e;
         }
     }
 
+    let closed = false;
     return {
-        get node() { return connected; },
+        get node() { return connected.url; },
+        get nodes() { return publicNodes(normalizedNodes); },
         viewOnly,
         birthdayHeight: birthday,
         async newSubaddress(label = '') {
@@ -246,11 +262,20 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
             return { txid: String(txid).trim().toLowerCase(), address, message, signature };
         },
         async sync() { await doSync(); },
+        async tipHeight() {
+            const activeFirst = [connected, ...normalizedNodes.filter(node => node !== connected)];
+            return await fetchDaemonHeight(activeFirst);
+        },
         async height() { return Number(await wallet.getHeight()); },
         async daemonHeight() { return Number(await wallet.getDaemonHeight()); },
         async save() { try { if (path) await wallet.save(); } catch { /* in-memory */ } },
-        async close(save = false) { try { await wallet.close(!!save && !!path); } catch { /* ignore */ } },
+        async close(save = false) {
+            if (closed) return;
+            closed = true;
+            try { await wallet.close(!!save && !!path); } catch { /* ignore */ }
+            await Promise.allSettled(bridges.map(bridge => bridge.close()));
+        },
     };
 }
 
-module.exports = { createScanner, toRow, creditableRows };
+module.exports = { createScanner, fetchDaemonHeight, toRow, creditableRows };
