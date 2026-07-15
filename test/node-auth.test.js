@@ -125,7 +125,7 @@ async function main() {
         ok('authenticated redirect is rejected', redirectError && redirectError.code === 'node-redirect');
         ok('redirect target receives no request', collectorHits === 0);
 
-        // the redirect test above is a GET; POST must behave the same — a 3xx answer to an
+        // the redirect test above is a GET; POST must behave the same: a 3xx answer to an
         // authenticated POST is refused outright and the target never sees the credentials.
         let postRedirectError;
         try {
@@ -166,6 +166,91 @@ async function main() {
         const serialized = JSON.stringify(wrongPassError, Object.getOwnPropertyNames(wrongPassError || {}));
         ok('wrong digest password has a specific code', wrongPassError && wrongPassError.code === 'node-auth');
         ok('rejection carries no password anywhere on the error', !serialized.includes('deliberately-wrong') && !serialized.includes(digestPass));
+
+        // RFC 7616 SHA-256: same handshake, stronger hash. A modern proxy works as-is.
+        const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+        let shaAccepted = 0;
+        const shaNode = await listen((req, res) => {
+            if (!req.headers.authorization) {
+                res.writeHead(401, { 'www-authenticate': 'Digest realm="node", nonce="sha-nonce", algorithm=SHA-256, qop="auth"' });
+                res.end('challenge');
+                return;
+            }
+            const values = parseDigest(req.headers.authorization);
+            const ha1 = sha256(`${digestUser}:node:${digestPass}`);
+            const ha2 = sha256(`${req.method}:${values.uri}`);
+            const expected = sha256(`${ha1}:sha-nonce:${values.nc}:${values.cnonce}:auth:${ha2}`);
+            if (values.response !== expected) { res.writeHead(403); res.end('bad'); return; }
+            shaAccepted++;
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ height: 34567 }));
+        });
+        const shaResult = await requestNode({ ...digestNode, url: shaNode.url }, { path: '/get_height' });
+        await shaNode.close();
+        ok('SHA-256 digest authenticates', shaResult.json.height === 34567 && shaAccepted === 1);
+
+        // an -sess HA1 folds the cnonce in, so even without qop the header must carry the
+        // cnonce or the server cannot recompute the response.
+        let sessAccepted = 0;
+        const sessNode = await listen((req, res) => {
+            if (!req.headers.authorization) {
+                res.writeHead(401, { 'www-authenticate': 'Digest realm="node", nonce="sess-nonce", algorithm=MD5-sess' });
+                res.end('challenge');
+                return;
+            }
+            const values = parseDigest(req.headers.authorization);
+            const ha1 = md5(`${md5(`${digestUser}:node:${digestPass}`)}:sess-nonce:${values.cnonce}`);
+            const expected = md5(`${ha1}:sess-nonce:${md5(`${req.method}:${values.uri}`)}`);
+            if (!values.cnonce || values.response !== expected) { res.writeHead(403); res.end('bad'); return; }
+            sessAccepted++;
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ height: 45678 }));
+        });
+        const sessResult = await requestNode({ ...digestNode, url: sessNode.url }, { path: '/get_height' });
+        await sessNode.close();
+        ok('MD5-sess without qop still carries the cnonce the server needs', sessResult.json.height === 45678 && sessAccepted === 1);
+
+        // an expired nonce (401 stale=true) gets exactly one retry with the fresh nonce.
+        let staleAuthed = 0;
+        const staleNode = await listen((req, res) => {
+            if (!req.headers.authorization) {
+                res.writeHead(401, { 'www-authenticate': 'Digest realm="node", nonce="old", algorithm=MD5, qop="auth"' });
+                res.end('challenge');
+                return;
+            }
+            staleAuthed++;
+            if (parseDigest(req.headers.authorization).nonce === 'old') {
+                res.writeHead(401, { 'www-authenticate': 'Digest realm="node", nonce="fresh", algorithm=MD5, qop="auth", stale=true' });
+                res.end('stale');
+                return;
+            }
+            if (!verifyDigest(req, digestUser, digestPass, 'node', 'fresh')) { res.writeHead(403); res.end('bad'); return; }
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({ height: 56789 }));
+        });
+        const staleResult = await requestNode({ ...digestNode, url: staleNode.url }, { path: '/get_height' });
+        await staleNode.close();
+        ok('expired nonce retries once with the fresh nonce', staleResult.json.height === 56789 && staleAuthed === 2);
+
+        // a server that always answers stale=true gets that one retry and then a hard
+        // node-auth, never a loop.
+        let loopAuthed = 0;
+        const loopNode = await listen((req, res) => {
+            if (!req.headers.authorization) {
+                res.writeHead(401, { 'www-authenticate': 'Digest realm="node", nonce="n1", algorithm=MD5, qop="auth"' });
+                res.end('challenge');
+                return;
+            }
+            loopAuthed++;
+            res.writeHead(401, { 'www-authenticate': `Digest realm="node", nonce="n${loopAuthed + 1}", algorithm=MD5, qop="auth", stale=true` });
+            res.end('stale again');
+        });
+        let loopError;
+        try {
+            await requestNode({ ...digestNode, url: loopNode.url }, { path: '/get_height' });
+        } catch (error) { loopError = error; }
+        await loopNode.close();
+        ok('perpetual stale cannot loop requests', loopError && loopError.code === 'node-auth' && loopAuthed === 2);
 
         const bridge = await createNodeBridge(basicNode);
         try {
