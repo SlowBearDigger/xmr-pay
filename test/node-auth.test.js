@@ -125,6 +125,48 @@ async function main() {
         ok('authenticated redirect is rejected', redirectError && redirectError.code === 'node-redirect');
         ok('redirect target receives no request', collectorHits === 0);
 
+        // the redirect test above is a GET; POST must behave the same — a 3xx answer to an
+        // authenticated POST is refused outright and the target never sees the credentials.
+        let postRedirectError;
+        try {
+            await requestNode({ ...digestNode, url: redirect.url }, { method: 'POST', path: '/json_rpc', body: JSON.stringify({ method: 'get_info' }) });
+        } catch (error) { postRedirectError = error; }
+        ok('authenticated POST redirect is rejected', postRedirectError && postRedirectError.code === 'node-redirect');
+        ok('POST redirect target receives no request', collectorHits === 0);
+
+        // digest fails closed: a challenge the client cannot answer safely is an error with a
+        // specific code, never a downgraded or guessed second request.
+        const badChallenges = [
+            ['node-auth-challenge', 'Bearer realm="node"'],
+            ['node-auth-challenge', 'Digest realm="node"'],
+            ['node-auth-algorithm', 'Digest realm="node", nonce="n", algorithm=SHA-512'],
+            ['node-auth-qop', 'Digest realm="node", nonce="n", algorithm=MD5, qop="auth-int"'],
+        ];
+        for (const [expected, header] of badChallenges) {
+            let strictHits = 0;
+            const strict = await listen((req, res) => {
+                strictHits++;
+                res.writeHead(401, { 'www-authenticate': header });
+                res.end('challenge');
+            });
+            let failure;
+            try {
+                await requestNode({ ...digestNode, url: strict.url }, { path: '/get_height' });
+            } catch (error) { failure = error; }
+            await strict.close();
+            ok(`unanswerable digest challenge fails closed (${expected})`, failure && failure.code === expected && strictHits === 1);
+        }
+
+        // pin redaction on the whole error object, not just the message: nothing serializable
+        // on a rejection may carry a password.
+        let wrongPassError;
+        try {
+            await requestNode({ ...digestNode, password: 'deliberately-wrong' }, { path: '/get_height' });
+        } catch (error) { wrongPassError = error; }
+        const serialized = JSON.stringify(wrongPassError, Object.getOwnPropertyNames(wrongPassError || {}));
+        ok('wrong digest password has a specific code', wrongPassError && wrongPassError.code === 'node-auth');
+        ok('rejection carries no password anywhere on the error', !serialized.includes('deliberately-wrong') && !serialized.includes(digestPass));
+
         const bridge = await createNodeBridge(basicNode);
         try {
             const response = await fetch(bridge.url + '/get_height', { redirect: 'manual' });
