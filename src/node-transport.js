@@ -12,9 +12,9 @@ class NodeTransportError extends Error {
     }
 }
 
-function md5(value) {
-    return crypto.createHash('md5').update(value).digest('hex');
-}
+// RFC 7616 algorithm tokens and the Node hash that computes each. Anything else fails
+// closed as node-auth-algorithm rather than guessing.
+const DIGEST_HASHES = { 'MD5': 'md5', 'MD5-SESS': 'md5', 'SHA-256': 'sha256', 'SHA-256-SESS': 'sha256' };
 
 function challengeParameters(header, wantedScheme) {
     const headers = Array.isArray(header) ? header : [header];
@@ -78,19 +78,21 @@ function quote(value) {
 
 function digestAuthorization(node, challenge, method, requestUri) {
     const algorithm = String(challenge.algorithm || 'MD5').toUpperCase();
-    if (algorithm !== 'MD5' && algorithm !== 'MD5-SESS') throw new NodeTransportError('node-auth-algorithm');
+    if (!DIGEST_HASHES[algorithm]) throw new NodeTransportError('node-auth-algorithm');
+    const h = value => crypto.createHash(DIGEST_HASHES[algorithm]).update(value).digest('hex');
+    const session = algorithm.endsWith('-SESS');
 
     const qops = String(challenge.qop || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
     if (qops.length && !qops.includes('auth')) throw new NodeTransportError('node-auth-qop');
 
     const cnonce = crypto.randomBytes(12).toString('hex');
     const nc = '00000001';
-    let ha1 = md5(`${node.username}:${challenge.realm}:${node.password}`);
-    if (algorithm === 'MD5-SESS') ha1 = md5(`${ha1}:${challenge.nonce}:${cnonce}`);
-    const ha2 = md5(`${method}:${requestUri}`);
+    let ha1 = h(`${node.username}:${challenge.realm}:${node.password}`);
+    if (session) ha1 = h(`${ha1}:${challenge.nonce}:${cnonce}`);
+    const ha2 = h(`${method}:${requestUri}`);
     const response = qops.length
-        ? md5(`${ha1}:${challenge.nonce}:${nc}:${cnonce}:auth:${ha2}`)
-        : md5(`${ha1}:${challenge.nonce}:${ha2}`);
+        ? h(`${ha1}:${challenge.nonce}:${nc}:${cnonce}:auth:${ha2}`)
+        : h(`${ha1}:${challenge.nonce}:${ha2}`);
 
     const fields = [
         `username="${quote(node.username)}"`,
@@ -101,7 +103,10 @@ function digestAuthorization(node, challenge, method, requestUri) {
         `algorithm=${algorithm}`,
     ];
     if (challenge.opaque) fields.push(`opaque="${quote(challenge.opaque)}"`);
-    if (qops.length) fields.push('qop=auth', `nc=${nc}`, `cnonce="${cnonce}"`);
+    if (qops.length) fields.push('qop=auth', `nc=${nc}`);
+    // a -sess HA1 folds the cnonce in, so the header must carry it even without qop;
+    // otherwise the server cannot recompute the response at all.
+    if (qops.length || session) fields.push(`cnonce="${cnonce}"`);
     return 'Digest ' + fields.join(', ');
 }
 
@@ -236,9 +241,20 @@ async function requestNode(node, { method = 'GET', path = '/', headers = {}, bod
         const challengeResponse = await requestOnce(upstream, { method: upperMethod, headers: baseHeaders, body: payload, timeoutMs: remaining(), maxResponseBytes, signal });
         if (challengeResponse.status >= 300 && challengeResponse.status < 400) throw new NodeTransportError('node-redirect');
         if (challengeResponse.status !== 401) return validateResponse(challengeResponse);
-        const challenge = parseDigestChallenge(challengeResponse.headers['www-authenticate']);
-        const authHeaders = { ...baseHeaders, authorization: digestAuthorization(node, challenge, upperMethod, upstream.pathname + upstream.search) };
-        return validateResponse(await requestOnce(upstream, { method: upperMethod, headers: authHeaders, body: payload, timeoutMs: remaining(), maxResponseBytes, signal }));
+        let challenge = parseDigestChallenge(challengeResponse.headers['www-authenticate']);
+        // stale=true on a 401 means the credentials were fine and only the nonce expired
+        // between challenge and reply (RFC 7616 section 3.3): retry once with the fresh nonce,
+        // never more, so a server that always claims stale cannot loop us.
+        for (let attempt = 0; ; attempt++) {
+            const authHeaders = { ...baseHeaders, authorization: digestAuthorization(node, challenge, upperMethod, upstream.pathname + upstream.search) };
+            const response = await requestOnce(upstream, { method: upperMethod, headers: authHeaders, body: payload, timeoutMs: remaining(), maxResponseBytes, signal });
+            if (response.status === 401 && attempt === 0) {
+                let renewed = null;
+                try { renewed = parseDigestChallenge(response.headers['www-authenticate']); } catch { renewed = null; }
+                if (renewed && String(renewed.stale || '').toLowerCase() === 'true') { challenge = renewed; continue; }
+            }
+            return validateResponse(response);
+        }
     }
 
     return validateResponse(await requestOnce(upstream, { method: upperMethod, headers: baseHeaders, body: payload, timeoutMs: remaining(), maxResponseBytes, signal }));
