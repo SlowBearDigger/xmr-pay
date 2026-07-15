@@ -24,9 +24,15 @@ const { createPaymentAgent } = require('../src/agent');
 const { sendWebhook } = require('../src/webhook');
 const { receiptFromOrder, signReceipt } = require('../src/receipt');
 const { generateSigningKey, configFingerprint } = require('../src/config');
+const { nodesFromEnv } = require('../src/nodes');
 
 const env = process.env;
-const NODES = (env.XMR_NODES || '').split(',').map(s => s.trim()).filter(Boolean);
+let NODES;
+try { NODES = nodesFromEnv(env); }
+catch (error) {
+    console.error(`invalid Monero node configuration: ${error && error.code ? error.code : 'invalid-node-list'}`);
+    process.exit(1);
+}
 const PORT = Number(env.PORT || 8788);
 const BIND = env.BIND || '127.0.0.1';          // holds the view key → localhost by default
 const TOKEN = env.AGENT_TOKEN || '';            // optional bearer auth for POST /order
@@ -70,8 +76,6 @@ function send(res, code, body) {
         console.error('set XMR_PRIMARY_ADDRESS and XMR_VIEW_KEY (private view key)');
         process.exit(1);
     }
-    if (NODES.length === 0) { console.error('set XMR_NODES (comma-separated)'); process.exit(1); }
-
     console.log('booting scanner (one-time WASM cold start)…');
     const scanner = await createScanner({
         primaryAddress: env.XMR_PRIMARY_ADDRESS,
@@ -245,10 +249,6 @@ function send(res, code, body) {
     // cached chain tip so a busy status endpoint doesn't hammer the node — gives
     // the UI a REAL, live block height to show ("scanning the blockchain").
     let _tip = { h: 0, at: 0 }, _tipInflight = null;
-    // trim trailing slashes without a backtracking regex (matches bin/agent.js's rtrimSlash;
-    // the project avoids the /\/+$/ pattern on node URLs).
-    const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
-
     async function tipHeight() {
         const now = Date.now();
         if (_tip.h && now - _tip.at < 5000) return _tip.h;
@@ -256,12 +256,11 @@ function send(res, code, body) {
         // cache, every request would otherwise fire its own /get_height — a
         // thundering herd against the node. share one in-flight fetch instead.
         if (_tipInflight) return _tipInflight;
-        // fetch STRAIGHT from the node, not via the wallet — a status read must
-        // never block behind an in-progress wallet sync.
+        // Read through the scanner's authenticated transport, not through the
+        // wallet lock. This keeps health checks responsive for Basic/Digest nodes.
         _tipInflight = (async () => {
             try {
-                const r = await fetch(rtrimSlash(scanner.node) + '/get_height', { signal: AbortSignal.timeout(4000) });
-                const j = await r.json(); const h = Number(j && j.height);
+                const h = Number(await scanner.tipHeight());
                 if (Number.isFinite(h) && h > 0) { _tip.h = h; _tip.at = Date.now(); }
             } catch { /* keep last */ }
             finally { _tipInflight = null; }
