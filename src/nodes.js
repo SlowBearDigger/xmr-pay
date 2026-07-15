@@ -44,7 +44,8 @@ function normalizeRow(value) {
     if (!isNodeRow(row)) fail('invalid-node');
 
     const url = String(row.url == null ? '' : row.url).trim().replace(/\/+$/, '');
-    if (!url || /\s/.test(url)) fail('invalid-url');
+    // WHATWG URL quietly rewrites backslashes to slashes; the PHP twin rejects them.
+    if (!url || /[\s\\]/.test(url)) fail('invalid-url');
 
     let parsed;
     try { parsed = new URL(url); }
@@ -53,6 +54,13 @@ function normalizeRow(value) {
     if (!parsed.hostname) fail('invalid-url');
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') fail('invalid-scheme');
     if (parsed.search || parsed.hash) fail('invalid-url');
+    // WHATWG URL silently repairs malformed input the PHP twin rejects: an EMPTY
+    // userinfo/query/fragment ('http://@x', 'http://x?') and missing authority slashes
+    // ('https:/x', 'https:x'). Check the raw string too so both sides agree on what
+    // counts as a node URL.
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) fail('invalid-url');
+    if (url.slice(parsed.protocol.length + 2).split('/', 1)[0].includes('@')) fail('embedded-credentials');
+    if (url.includes('?') || url.includes('#')) fail('invalid-url');
 
     let auth = String(row.auth == null ? 'none' : row.auth).trim().toLowerCase();
     if (!auth) auth = 'none';

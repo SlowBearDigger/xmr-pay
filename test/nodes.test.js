@@ -62,6 +62,13 @@ rejects('colon in authenticated username rejected', [{ url: 'https://node.exampl
 rejects('authenticated HTTP requires opt in', [{ url: 'http://127.0.0.1:38091', auth: 'basic', username: 'a', password: 'b' }], 'insecure-http-auth');
 rejects('query rejected', 'https://node.example/rpc?token=no', 'invalid-url');
 rejects('fragment rejected', 'https://node.example/rpc#token', 'invalid-url');
+rejects('empty userinfo rejected', 'https://@node.example', 'embedded-credentials');
+rejects('empty query rejected', 'https://node.example?', 'invalid-url');
+rejects('empty fragment rejected', 'https://node.example#', 'invalid-url');
+rejects('backslashes rejected', 'https:\\\\node.example', 'invalid-url');
+rejects('unbracketed IPv6 host rejected', 'https://::1:18081', 'invalid-url');
+rejects('single-slash scheme rejected', 'https:/node.example', 'invalid-url');
+rejects('slashless scheme rejected', 'https:node.example', 'invalid-url');
 rejects('invalid JSON rejected', '[not-json]', 'invalid-json');
 rejects('empty list rejected', '', 'empty-node-list');
 rejects('invalid list rejected', 42, 'invalid-node-list');
