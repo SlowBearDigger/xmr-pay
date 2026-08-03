@@ -164,6 +164,7 @@ paste into your store. `npx xmr-pay start` runs it again later.
 | `xmr-pay` (verify) | your backend or serverless fn | re-verify a buyer's tx proof on-chain, trustless |
 | `xmr-pay/watch` | your backend | auto-detection through your own monero-wallet-rpc |
 | `xmr-pay/scanner` | your backend | view-only WASM scanner, auto-detection with NO wallet-rpc daemon |
+| `xmr-pay/browser-scanner` | browser | view-only WASM scanner for a controlled in-person POS |
 | `xmr-pay/agent` | your backend | long-running order manager: per-order subaddress, summing, signed paid webhook |
 | `xmr-pay/config` | offline + browser | signed merchant configs, tamper-evident addresses |
 | `xmr-pay/webhook` | your backend | signed fulfillment webhooks to YOUR systems |
@@ -347,6 +348,25 @@ const r = await agent.check('ord_42');   // { paid, status, receivedXmr, shortfa
 Each order gets its own subaddress, and a second order can never bind a subaddress
 already in use, so two orders can't credit the same payment. Full guide, the runnable
 HTTP service, config, and the trust model: [docs/AGENT.md](docs/AGENT.md).
+
+For a controlled in-person POS, the scanner also has a browser-safe entry point:
+
+```js
+const { createBrowserScanner } = require('xmr-pay/browser-scanner');
+
+const scanner = await createBrowserScanner({
+  primaryAddress,
+  privateViewKey,
+  nodeUrl: 'https://your-browser-accessible-node.example',
+});
+```
+
+This mode accepts only a standard primary address, a private view key, and an
+unauthenticated HTTP(S) node URL. A POS served over HTTPS normally needs an HTTPS
+node with CORS enabled for the POS origin. Keep the view key in encrypted local
+storage, close the scanner when the terminal locks, and use one active register per
+wallet. Separate browser devices need separate wallet addresses unless a central
+coordinator allocates subaddresses for them.
 
 <details>
 <summary><b>Or through your own monero-wallet-rpc</b></summary>

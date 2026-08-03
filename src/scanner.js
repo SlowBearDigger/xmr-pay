@@ -16,6 +16,7 @@ const { xmrToPico } = require('./verify');
 const { summarizeTransfers } = require('./watch');
 const { normalizeNodes, publicNodes } = require('./nodes');
 const { requestNode, createNodeBridge } = require('./node-transport');
+const { creditableRows, read: call, toRow } = require('./scanner-common');
 
 let monerojs = null;
 function lazyMonero() { if (!monerojs) monerojs = require('monero-ts'); return monerojs; }
@@ -32,66 +33,6 @@ async function fetchDaemonHeight(nodes) {
         } catch { /* next node */ }
     }
     return null;
-}
-
-const big = (v) => BigInt((v == null ? 0 : (v.toString ? v.toString() : v)));
-const call = (o, m, p) => (o && typeof o[m] === 'function') ? o[m]() : (o ? o[p] : undefined);
-
-// normalize one monero-ts incoming transfer to the row shape summarizeTransfers
-// expects — defensive about the getX()/property naming across versions.
-function toRow(t) {
-    const tx = (typeof t.getTx === 'function') ? t.getTx() : (t.tx || {});
-    const confirmations = Number(call(tx, 'getNumConfirmations', 'numConfirmations') ?? 0) || 0;
-    const isConfirmed = !!call(tx, 'getIsConfirmed', 'isConfirmed');
-    const inPool = !isConfirmed || !!call(tx, 'getInTxPool', 'inTxPool');
-    // parse unlock_time (consensus time-lock). NOT the benign ~10-block maturation
-    // that getIsLocked() folds in — that's handled by confirmations + minConfirmations.
-    let unlockTime = 0n;
-    try { const u = call(tx, 'getUnlockTime', 'unlockTime'); if (u != null && String(u) !== '') unlockTime = BigInt(String(u)); } catch { unlockTime = 0n; }
-    const txid = call(tx, 'getHash', 'hash') || call(t, 'getTxHash', 'txHash') || null;
-    const amountPico = big(call(t, 'getAmount', 'amount') ?? 0n);
-    // the daemon flags a tx whose inputs it has seen double-spent. while that flag
-    // is set the payment is contested — never credit it (a reorg could replace it).
-    // monerod clears it once the tx is firmly in the chain. (MoneroPay surfaces
-    // this field but doesn't gate on it; we gate — strictly safer.)
-    const doubleSpendSeen = !!call(tx, 'getIsDoubleSpendSeen', 'isDoubleSpendSeen');
-    // the block this transfer landed in (0 / falsy while still in the mempool).
-    // used to bind a payment to the order that was live when it arrived.
-    const height = Number(call(tx, 'getHeight', 'height') ?? 0) || 0;
-    // "locked" = the unlock_time has NOT yet elapsed (a future time-lock — the
-    // scam vector, funds not spendable). an ALREADY-elapsed unlock_time means the
-    // funds are spendable now → NOT locked (rejecting those, as we used to, threw
-    // away legit payments). Monero encodes unlock_time as a block height when
-    // < 500000000, else a unix timestamp. (MoneroPay/BTCPay only handle the
-    // block-height form; we handle both.) the ~10-block maturation stays the job
-    // of confirmations + minConfirmations, so we under-estimate the tip by 1 (the
-    // tx's own block is conf #1) to never unlock a block early.
-    let locked = false;
-    if (unlockTime > 0n) {
-        if (unlockTime < 500000000n) {
-            const currentHeight = BigInt(height > 0 ? height + confirmations - 1 : 0);
-            locked = currentHeight < unlockTime;
-        } else {
-            locked = BigInt(Math.floor(Date.now() / 1000)) < unlockTime;
-        }
-    }
-    // the minor subaddress index this transfer landed on — lets ONE account-wide
-    // getTransfers be distributed across many orders (the O(1)-per-tick batch path).
-    const si = Number(call(t, 'getSubaddressIndex', 'subaddressIndex'));
-    const subaddressIndex = Number.isFinite(si) ? si : null;
-    return { txid, amountPico, confirmations, inPool, locked, height, doubleSpendSeen, subaddressIndex };
-}
-
-// an order can only ever be paid by money that arrives AFTER the order exists.
-// drop CONFIRMED transfers below the order's birthday height (minus a small
-// reorg/timing grace) so a REUSED or pre-funded subaddress can't settle a new
-// order with a stale payment — the false-instant-paid bug. in-pool / unheighted
-// rows (height 0) are recent by definition, so they're always kept.
-const BIRTHDAY_GRACE = 3;
-function creditableRows(rows, minHeight, grace = BIRTHDAY_GRACE) {
-    if (minHeight == null) return rows;
-    const floor = minHeight - grace;
-    return rows.filter(r => !r.height || r.height >= floor);
 }
 
 async function createScanner({ primaryAddress, privateViewKey, networkType = 'mainnet', nodes = [], restoreHeight, path, password = '', accountIndex = 0, syncTimeoutMs = 120000, monero } = {}) {
