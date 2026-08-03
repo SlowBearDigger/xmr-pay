@@ -67,6 +67,8 @@ const { classifyResult, atomicToPico } = require('../src/verify');
 const op = classifyResult({ isGood: true, receivedPico: xmrToPico('0.02') + 1n, confirmations: 10, inTxPool: false }, { expectedPico: xmrToPico('0.02'), minConfirmations: 1 });
 ok('overpaid excess is an exact string (no scientific/float)', op.status === 'ok' && op.overpaid === true && op.overpaidXmr === '0.000000000001');
 ok('exact pay → not overpaid, excess "0"', classifyResult({ isGood: true, receivedPico: xmrToPico('0.02'), confirmations: 10, inTxPool: false }, { expectedPico: xmrToPico('0.02'), minConfirmations: 1 }).overpaidXmr === '0');
+const zeroConf = classifyResult({ isGood: true, receivedPico: xmrToPico('0.02'), confirmations: 0, inTxPool: true }, { expectedPico: xmrToPico('0.02'), minConfirmations: 0 });
+ok('minConfirmations=0 is normalized and cannot authorize mempool payment', zeroConf.status === 'mempool');
 // atomicToPico: exact for bigint/string of ANY size; fail-closed on a lossy number
 ok('atomicToPico: huge amount as a STRING is exact', atomicToPico('18446744073709551615') === 18446744073709551615n);
 ok('atomicToPico: bigint passes through exactly', atomicToPico(9007199254740993n) === 9007199254740993n);

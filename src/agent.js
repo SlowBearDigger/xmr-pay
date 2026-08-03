@@ -17,11 +17,14 @@ const { toInvoiceState } = require('./state');   // canonical lifecycle (created
 // while there's an unpaid order inside its checkout window (or an `activeHint`
 // signal — e.g. an open SSE stream), and falls back to `pollMs` when idle. set
 // activePollMs >= pollMs (the default) to disable adaptivity (fixed cadence).
-function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, activePollMs = 15000, activeWindowMs = 1800000, activeHint, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, paidRetentionMs = 0, toleranceXmr = '0', now = Date.now } = {}) {
+function createPaymentAgent({ scanner, store, usedSubaddressHighWater = 0, minConfirmations = 1, pollMs = 15000, activePollMs = 15000, activeWindowMs = 1800000, activeHint, persistPaid, persistRetired, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, paidRetentionMs = 0, toleranceXmr = '0', now = Date.now } = {}) {
     if (!scanner || typeof scanner.checkOrder !== 'function' || typeof scanner.newSubaddress !== 'function') {
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
+    const settlementConfirmations = Math.max(1, Number(minConfirmations) | 0);
     const orders = store || new Map();
+    const transitionTails = new Map();
+    let paidCommitTail = Promise.resolve();
     const reserving = new Set();   // ids in-flight (created but not yet stored) — closes the create-order TOCTOU
     // every subaddress index EVER bound to an order. a Monero subaddress must back
     // AT MOST ONE order: if two orders shared an index, a single payment to it
@@ -30,7 +33,17 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
     // a used index is never reassigned, even after its order is paid/expired, so a
     // late payment to an old subaddress can't credit a fresh order.
     const usedIndexes = new Set();
-    for (const o of orders.values()) { if (o && o.index != null) usedIndexes.add(o.index); }
+    if (!Number.isSafeInteger(usedSubaddressHighWater) || usedSubaddressHighWater < 0) throw new Error('usedSubaddressHighWater must be a nonnegative safe integer');
+    let highWater = usedSubaddressHighWater;
+    for (const o of orders.values()) {
+        if (o && o.index != null) { usedIndexes.add(o.index); highWater = Math.max(highWater, o.index); }
+        if (o && (!Number.isSafeInteger(o.revision) || o.revision < 0)) o.revision = 0;
+        if (o && (!Number.isSafeInteger(o.minConfirmations) || o.minConfirmations < 1 || typeof o.syncing !== 'boolean')) {
+            o.minConfirmations = Number.isSafeInteger(o.minConfirmations) && o.minConfirmations >= 0 ? Math.max(1, o.minConfirmations) : settlementConfirmations;
+            o.syncing = typeof o.syncing === 'boolean' ? o.syncing : false;
+            o.revision++;
+        }
+    }
     let counter = 0;
     const nextId = idgen || (() => `ord_${(++counter).toString(36)}`);
 
@@ -74,11 +87,12 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                 // reusing it would let one payment settle two orders. RESERVE it
                 // synchronously (before any await) so two concurrent binds of the
                 // same index can't both pass the check (a check-then-act TOCTOU).
-                if (usedIndexes.has(index)) throw new Error(`subaddress index ${index} is already assigned to another order`);
+                if (!Number.isSafeInteger(index) || index < 0) throw new Error('subaddress index must be a nonnegative safe integer');
+                if (index <= highWater || usedIndexes.has(index)) throw new Error(`subaddress index ${index} is already assigned to another order`);
                 usedIndexes.add(index);
+                highWater = index;
                 idx = index;
-                try { address = await scanner.addressAt(index); }
-                catch (e) { usedIndexes.delete(index); throw e; }   // roll back the reservation if the lookup fails
+                address = await scanner.addressAt(index);
             } else {
                 // take a FRESH subaddress (pool if warm, else create one), skipping
                 // any candidate whose index is already in use — defends against a
@@ -95,7 +109,11 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                     } else {
                         cand = await scanner.newSubaddress(label || oid);
                     }
-                    if (!usedIndexes.has(cand.index)) { usedIndexes.add(cand.index); idx = cand.index; address = cand.address; birthdayHeight = cand.atHeight; }
+                    if (!Number.isSafeInteger(cand.index) || cand.index < 0) continue;
+                    if (cand.index > highWater && !usedIndexes.has(cand.index)) {
+                        usedIndexes.add(cand.index); highWater = cand.index;
+                        idx = cand.index; address = cand.address; birthdayHeight = cand.atHeight;
+                    }
                     // else: collision → discard this candidate and take the next
                 }
             }
@@ -104,7 +122,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
             // the number-path validation above but would then THROW in checkOrder's xmrToPico
             // (string path, >12 decimals) and brick settlement for this order — and the tick.
             const amountStr = picoToXmrString(expectedPico);
-            const order = { id: oid, amount: amountStr, address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', state: 'created', paid: false, receivedXmr: 0, shortfallXmr: amountStr, txids: [] };
+            const order = { id: oid, amount: amountStr, address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', state: 'created', paid: false, receivedXmr: 0, receivedPico: '0', pendingXmr: 0, lockedXmr: 0, shortfallXmr: amountStr, overpaid: false, overpaidXmr: '0', confirmations: 0, minConfirmations: settlementConfirmations, syncing: false, txids: [], revision: 0 };
             orders.set(oid, order);
             kick();   // a fresh order means a buyer is about to pay — pull the next poll in
             return { ...order };
@@ -115,47 +133,88 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
 
     // fold a check result into an order's state; fire onPaid EXACTLY ONCE on the
     // unpaid→paid transition. shared by the single check() and the batch tick().
-    function applyResult(order, r) {
+    function sameValue(a, b) {
+        if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((value, index) => value === b[index]);
+        return Object.is(a, b);
+    }
+    function applyFields(order, fields) {
+        let changed = false;
+        for (const [key, value] of Object.entries(fields)) {
+            if (key === 'revision') continue;
+            if (!sameValue(order[key], value)) { order[key] = value; changed = true; }
+        }
+        if (changed) order.revision = (Number.isSafeInteger(order.revision) && order.revision >= 0 ? order.revision : 0) + 1;
+        return changed;
+    }
+
+    function commitPaidTransition(order, fields) {
+        const commit = paidCommitTail.catch(() => {}).then(async () => {
+            if (order.paid) return { result: { ...order }, transitioned: false };
+            const candidate = { ...order };
+            applyFields(candidate, fields);
+            if (persistPaid) await persistPaid(candidate);
+            Object.assign(order, candidate);
+            return { result: { ...order }, transitioned: true };
+        });
+        paidCommitTail = commit.then(() => undefined, () => undefined);
+        return commit;
+    }
+
+    async function applyResultNow(order, r) {
         const wasPaid = order.paid;
         // settled LATCHES: once an order is paid, a later re-check (reachable only via check();
         // the poller skips paid orders) must never un-capture it. A reorg deeper than
         // minConfirmations is the merchant's bounded, accepted risk — refresh the confirmation
         // count but keep the settled state + paid flag. (Mirrors docs/EVENTS.md "settled latches".)
         if (wasPaid && !r.paid) {
-            if (r.confirmations != null) order.confirmations = r.confirmations;
+            if (r.confirmations != null) applyFields(order, { confirmations: r.confirmations });
             const kept = { ...order };
             if (onUpdate) { try { onUpdate(kept); } catch { /* ignore */ } }
             return kept;
         }
-        order.status = r.status;
         // fold the settlement status into the canonical invoice state (keep the prior state
         // for verify-only results that don't map to a transition). `status` is kept for
         // backward compat; `state` is the canonical lifecycle the events + UI key on.
         const nextState = toInvoiceState(r.status);
-        if (nextState) order.state = nextState;
-        order.paid = r.paid;
-        order.receivedXmr = r.receivedXmr;
-        if (r.receivedPico != null) order.receivedPico = r.receivedPico;
-        order.pendingXmr = r.pendingXmr;
-        order.lockedXmr = r.lockedXmr;
-        order.shortfallXmr = r.shortfallXmr;
-        order.overpaid = !!r.overpaid;
-        order.overpaidXmr = r.overpaidXmr != null ? r.overpaidXmr : '0';
-        order.confirmations = r.confirmations;
-        order.txids = r.txids;
-        if (r.paid && !wasPaid) order.paidAt = now();   // stamp settlement (for the retention sweep)
-        const result = { ...order };
+        const fields = {
+            status: r.status,
+            paid: r.paid,
+            receivedXmr: r.receivedXmr,
+            pendingXmr: r.pendingXmr == null ? 0 : r.pendingXmr,
+            lockedXmr: r.lockedXmr == null ? 0 : r.lockedXmr,
+            shortfallXmr: r.shortfallXmr,
+            overpaid: !!r.overpaid,
+            overpaidXmr: r.overpaidXmr != null ? r.overpaidXmr : '0',
+            confirmations: r.confirmations == null ? 0 : r.confirmations,
+            txids: Array.isArray(r.txids) ? r.txids : [],
+        };
+        if (nextState) fields.state = nextState;
+        if (r.receivedPico != null) fields.receivedPico = r.receivedPico;
+        if (r.paid && !wasPaid) fields.paidAt = now();   // stamp settlement (for the retention sweep)
         if (r.paid && !wasPaid) {
-            // fire without awaiting so a slow webhook delivery never stalls the poll.
-            if (onPaid) { Promise.resolve().then(() => onPaid(result)).catch(() => {}); }
-        } else if (onUpdate) { try { onUpdate(result); } catch { /* ignore */ } }
+            const committed = await commitPaidTransition(order, fields);
+            if (committed.transitioned && onPaid) await onPaid(committed.result);
+            return committed.result;
+        }
+        applyFields(order, fields);
+        const result = { ...order };
+        if (onUpdate) { try { onUpdate(result); } catch { /* ignore */ } }
         return result;
+    }
+
+    function applyResult(order, r) {
+        const previous = transitionTails.get(order.id) || Promise.resolve();
+        const current = previous.catch(() => {}).then(() => applyResultNow(order, r));
+        transitionTails.set(order.id, current);
+        return current.finally(() => {
+            if (transitionTails.get(order.id) === current) transitionTails.delete(order.id);
+        });
     }
 
     async function check(id, { sync = true } = {}) {
         const order = orders.get(id);
         if (!order) return null;
-        const r = await scanner.checkOrder({ subaddressIndex: order.index, amount: order.amount, minConfirmations, minHeight: order.birthdayHeight, sync, toleranceXmr });
+        const r = await scanner.checkOrder({ subaddressIndex: order.index, amount: order.amount, minConfirmations: order.minConfirmations, minHeight: order.birthdayHeight, sync, toleranceXmr });
         return applyResult(order, r);
     }
 
@@ -184,6 +243,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
                 // paidRetentionMs. 0 = keep forever (default). GET /order|/receipt
                 // 404s after this, so set it well past your buyers' poll window.
                 if (paidRetentionMs > 0 && order.paidAt != null && (nowMs - order.paidAt) >= paidRetentionMs) {
+                    if (persistRetired) await persistRetired({ ...order });
                     orders.delete(order.id);
                 }
                 continue;
@@ -194,12 +254,17 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         // ONE account-wide getTransfers, distributed across every pending order.
         if (typeof scanner.checkOrders === 'function') {
             let results;
-            try { results = await scanner.checkOrders(toCheck.map(o => ({ id: o.id, index: o.index, amount: o.amount, birthdayHeight: o.birthdayHeight })), { minConfirmations, toleranceXmr, sync: false }); }
+            try { results = await scanner.checkOrders(toCheck.map(o => ({ id: o.id, index: o.index, amount: o.amount, birthdayHeight: o.birthdayHeight, minConfirmations: o.minConfirmations })), { minConfirmations: settlementConfirmations, toleranceXmr, sync: false }); }
             catch { return; }   // transient; keep state, retry next tick
-            for (const order of toCheck) { const r = results.get(order.id); if (r) applyResult(order, r); }
+            for (const order of toCheck) { const r = results.get(order.id); if (r) await applyResult(order, r); }
         } else {
             // fallback for a scanner without batch support (e.g. a test mock): per-order
-            for (const order of toCheck) { try { await check(order.id, { sync: false }); } catch { /* transient */ } }
+            for (const order of toCheck) {
+                let r;
+                try { r = await scanner.checkOrder({ subaddressIndex: order.index, amount: order.amount, minConfirmations: order.minConfirmations, minHeight: order.birthdayHeight, sync: false, toleranceXmr }); }
+                catch { continue; }
+                await applyResult(order, r);
+            }
         }
         // EXPIRY runs AFTER the check, on FRESH state. drop a still-unpaid order
         // once it's older than expiryMs — this bounds per-tick work and memory
@@ -246,7 +311,9 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
     async function loop() {
         if (!running) return;
         ticking = true;
-        try { await tick(); } finally { ticking = false; }
+        try { await tick(); }
+        catch (error) { console.error(`[agent] tick failed: ${error && error.message ? error.message : error}`); }
+        finally { ticking = false; }
         if (running) schedule(nextDelay());
     }
     function start() {
@@ -263,6 +330,13 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         tick,
         get: (id) => { const o = orders.get(id); return o ? { ...o } : null; },
         list: () => [...orders.values()].map(o => ({ ...o })),
+        usedSubaddressHighWater: () => highWater,
+        update: (id, fields) => {
+            const order = orders.get(id);
+            if (!order) return null;
+            applyFields(order, fields || {});
+            return { ...order };
+        },
         poolReady: () => pool.length,
         kick,   // pull the next poll in now (e.g. a buyer just opened the checkout stream)
         start,

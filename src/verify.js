@@ -158,9 +158,10 @@ function classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { exp
             shortfallXmr: picoToXmrString(expectedPico - receivedPico),
         };
     }
-    // clamp minConfirmations so a negative value never bypasses the confirmation gate.
-    if (confirmations < Math.max(0, minConfirmations | 0)) {
-        return { status: inTxPool ? 'mempool' : 'unconfirmed', reason: `${confirmations}/${minConfirmations} confirmations` };
+    // Zero-confirmation observations are replaceable and never authoritative.
+    const requiredConfirmations = Math.max(1, minConfirmations | 0);
+    if (confirmations < requiredConfirmations) {
+        return { status: inTxPool ? 'mempool' : 'unconfirmed', reason: `${confirmations}/${requiredConfirmations} confirmations` };
     }
     const overpaid = receivedPico > expectedPico;
     // EXACT piconero string (not picoToXmr's float) — this is a refund amount the
@@ -333,7 +334,7 @@ async function fetchUnlockTime(nodes, txid, quorum = 1) {
  * @param {string|number} opts.amount        expected XMR (string keeps 12-decimal nonces exact)
  * @param {string[]} opts.nodes              node URIs the merchant trusts, in preference order
  * @param {string}   [opts.networkType]      'mainnet' (default) | 'stagenet' | 'testnet'
- * @param {number}   [opts.minConfirmations] default 1; 0 accepts mempool (merchant's own risk)
+ * @param {number}   [opts.minConfirmations] default 1; values below 1 are normalized to 1
  * @param {number}   [opts.quorum]           default 1; >=2 requires that many nodes to agree
  * @param {string}   [opts.message]          challenge message the proof was generated over (default '')
  * @param {number}   [opts.toleranceXmr]     accepted shortfall, default 0 (exact — keeps amount-nonce meaningful)

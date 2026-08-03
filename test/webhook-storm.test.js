@@ -1,6 +1,6 @@
 // webhook storm — a forever-failing fulfillment endpoint must stay BOUNDED: a
-// fixed number of attempts, no throw, no hang, and the agent settles the order
-// regardless (delivery + idempotency are the caller's job).
+// fixed number of attempts and no hang. Delivery failures remain bounded, while
+// agent callback errors are surfaced after the paid state is durable.
 //   node test/webhook-storm.test.js
 
 const { sendWebhook } = require('../src/webhook');
@@ -35,20 +35,20 @@ function failingFetch(mode) {
         ok('attempts:3 → exactly 3 tries then gives up (bounded, never infinite)', f.calls() === 3 && res && res.delivered === false, `${f.calls()} calls`);
     }
 
-    // the agent settles the order even when onPaid (the webhook) throws — the failed
-    // delivery must not crash the poller or leave the order un-settled.
+    // The durable paid transition remains settled when onPaid throws, but the
+    // fulfillment error must reach the caller instead of disappearing.
     {
         let idx = 0; const rows = new Map();
         const ms = {
             async sync() { }, async newSubaddress() { const i = ++idx; return { address: 's' + i, index: i, atHeight: 1000 + i }; }, async addressAt(i) { return 's' + i; },
             async checkOrder({ subaddressIndex, amount, minConfirmations = 1 }) { return summarizeTransfers(rows.get(subaddressIndex) || [], xmrToPico(amount), minConfirmations); },
         };
-        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, onPaid: async () => { throw new Error('webhook exploded'); } });
+        const a = createPaymentAgent({ scanner: ms, minConfirmations: 1, persistPaid: async () => {}, onPaid: async () => { throw new Error('webhook exploded'); } });
         const o = await a.createOrder({ id: 'w', amount: '0.1' });
         rows.set(o.index, [{ txid: 't1', amountPico: 100000000000n, confirmations: 10, inPool: false, locked: false }]);
-        let crashed = false, r;
-        try { r = await a.check('w'); } catch { crashed = true; }
-        ok('onPaid throwing (webhook down) does NOT crash the agent; order still settles', !crashed && r && r.paid === true && a.get('w').paid === true);
+        let surfaced;
+        try { await a.check('w'); } catch (error) { surfaced = error; }
+        ok('onPaid error is surfaced after the durable order settles', surfaced?.message === 'webhook exploded' && a.get('w').paid === true);
     }
 
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);

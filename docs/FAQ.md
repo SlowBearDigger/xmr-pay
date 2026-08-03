@@ -13,8 +13,9 @@ This covers both products in the project:
 - **`xmr-pay`** — the JavaScript/Node library + `<xmr-pay>` checkout widget + `npx xmr-pay` agent (this repo).
 - **xmr-pay for WooCommerce** — the WordPress/WooCommerce plugin (separate repo).
 
-The facts below are taken from the actual code (lib `xmr-pay@0.4.0-beta.1`, plugin
-`0.1.5-beta`), not from memory.
+The `xmr-pay` behavior below describes the current source in this repository. Plugin
+behavior refers to the separate WooCommerce plugin and must be checked against the
+installed plugin version.
 
 ---
 
@@ -148,8 +149,10 @@ Library pieces (subpath exports): `xmr-pay` (=`./verify`, keyless proof), `./sca
   tx hash).
 - **Time-locks (`unlock_time`).** A future-locked (unspendable) payment is reported
   `locked`, never paid. Fails closed if no node returns the tx.
-- **0-conf** (`minConfirmations: 0`) is opt-in risk (a mempool tx can be dropped) — use it
-  for small/digital goods; scale confirmations with value (e.g. 10 for high value).
+- **Mempool is provisional.** The agent and verification paths normalize every
+  `minConfirmations` value below `1` to `1`. A mempool or other zero-confirmation
+  transaction therefore never becomes `paid` and never authorizes fulfillment.
+  Scale confirmations with value (for example, 10 for high value).
 - **Reorgs after fulfillment.** Once an order is marked paid the poller stops re-checking
   it; a later reorg won't un-settle it. Choose confirmations for your value-at-risk.
 - **View-key privacy.** The view key can *read* all your incoming payments but cannot

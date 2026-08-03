@@ -116,7 +116,7 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `XMR_NETWORK` | | `mainnet` | `mainnet` · `stagenet` · `testnet` |
 | `XMR_RESTORE_HEIGHT` | | tip | omit to start at "now" (instant first sync); set it only to find older payments |
 | `XMR_WALLET_PATH` | | in-memory | persist the wallet so restarts skip re-scanning |
-| `XMR_MIN_CONFIRMATIONS` | | `1` | raise for high-value orders (reorg safety) |
+| `XMR_MIN_CONFIRMATIONS` | | `1` | values below `1` are normalized to `1`; mempool and other zero-confirmation observations never become `paid`. Raise for high-value orders |
 | `XMR_TOLERANCE_XMR` | | `0` | accept a buyer who lands short by up to this (absorbs dust/fee/rounding so they aren't stuck "underpaid"). `0` = exact; never allowed to reach the price |
 | `XMR_EXPIRY_HOURS` | | `0` | drop unpaid orders after N hours (bounds per-tick work + memory; `0` = never). A late payment still lands on-chain — it just won't auto-complete. |
 | `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order|/receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
@@ -181,9 +181,11 @@ directory private and out of source control.
 
 ## API
 
-- `POST /order` `{amount, id?, label?}` → `{id, address, amount, status, birthdayHeight}` — derives a fresh per-order subaddress. (Requires `Authorization: Bearer <AGENT_TOKEN>` if set.)
-- `GET /order/:id` → `{paid, status, amount, receivedXmr, lockedXmr, shortfallXmr, confirmations, txids}` — live on-chain status.
+- `POST /order` `{amount, id?, label?}` derives a fresh per-order subaddress, persists it, then returns the same full snapshot as GET and SSE. (Requires `Authorization: Bearer <AGENT_TOKEN>` if set.)
+- `GET /order/:id` returns the revisioned authoritative snapshot: `{id, address, amount, paid, status, receivedXmr, lockedXmr, shortfallXmr, confirmations, minConfirmations, syncing, txids, birthdayHeight, revision}`.
 - `GET /healthz` → `{ok, network, node, viewOnly, orders}`.
+
+`revision` is a non-negative monotonic integer for that order. A client must ignore lower revisions, accept an identical equal revision, and fail closed if an equal revision contains different settlement state.
 
 `status` is one of: `pending` · `partial` · `mempool` · `locked` · `paid`.
 `shortfallXmr` is the **exact** amount still owed (piconero-precise; counts funds
@@ -242,10 +244,11 @@ proof endpoint as a dispute path.
 
 ## Honest notes
 
-- **Order state is in memory** in the reference agent. For production, persist
-  orders (id → subaddress index + amount) in your own DB and re-register them on
-  restart (`createOrder({ id, amount, index })` binds an existing subaddress); the
-  wallet itself persists with `XMR_WALLET_PATH` so scanning resumes fast.
+- **The reference agent persists order state.** Its versioned ledger atomically
+  stores order state and the monotonic used-subaddress high-water mark. A paid
+  transition is written before it becomes visible or triggers fulfillment. Custom
+  integrations should provide the same ordering through `persistPaid`; the wallet
+  itself persists with `XMR_WALLET_PATH` so scanning resumes fast.
 - **Maturation vs. time-locks.** Every confirmed output is briefly unspendable
   during Monero's ~10-block maturation — that's benign, so a confirmed payment
   counts toward `paid` at `XMR_MIN_CONFIRMATIONS`, the same as proof mode and the

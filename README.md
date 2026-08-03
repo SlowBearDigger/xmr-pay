@@ -121,8 +121,8 @@ We would rather tell you the rough edges than have you find them with a customer
 > **You are trusting a node to tell the truth.** A single public node could lie, be
 > slow, or go down. Fine for tips. For real revenue, run your own node or require two
 > nodes to agree (it then refuses to confirm rather than trust one source).
-> **Few confirmations is fast but reversible.** Accepting at zero confirmations is
-> instant, but a payment can still vanish in a chain reorg. Use more confirmations
+> **Few confirmations is fast but reversible.** XMRPay shows mempool funds as
+> provisional and requires at least one block before `paid`. Use more confirmations
 > for higher-value orders. This is your risk dial to set.
 > **A brand-new transaction can take a moment to verify on a public node.** If a
 > buyer submits a proof for a transaction still in the mempool, a public node may not
@@ -152,8 +152,8 @@ npx xmr-pay        # setup wizard (address + view key + node), then it runs
 ```
 
 It scans from the current block (no historical rescan), generates the token and
-webhook secret, asks your settlement speed (`instant` 0-conf, `fast` 1 block,
-`secure` 10 blocks), persists its wallet and orders, and prints the exact values to
+webhook secret, asks your settlement speed (`instant` and `fast` both wait 1 block,
+`secure` waits 10 blocks), persists its wallet and orders, and prints the exact values to
 paste into your store. `npx xmr-pay start` runs it again later.
 
 ## How it works
@@ -291,7 +291,7 @@ const r = await verifyPayment({
   address: order.address,
   amount: order.amount_xmr,          // string keeps 12-decimal nonces exact
   nodes: ['https://your-node:18081', 'https://fallback:18081'],
-  minConfirmations: 1,               // 0 accepts mempool, your risk, your call
+  minConfirmations: 1,               // values below 1 are normalized to 1
   quorum: 1,                         // 2+ means independent nodes must agree
   alreadyUsed: (txid) => db.txidSeen(txid),
 });
@@ -431,7 +431,7 @@ bundled WASM wallet and its transitive dependencies entirely.
 > **Use `makeAmountNonce` for every order** (proof mode), so a proof can't fit
 > another order.
 > **Scale `minConfirmations` with value**: 1 for small carts, 10 for high-value
-> (reorg safety). `minConfirmations: 0` (mempool) is opt-in risk.
+> (reorg safety). Mempool detection is provisional and never authorizes fulfillment.
 > **`quorum: 2` for high-value orders**, so two independent nodes must agree.
 > **Never take `address`/`amount` from the request body**; always your own order
 > record (the examples do this).
@@ -500,8 +500,8 @@ cd demo && npm install && npm start    # http://localhost:8780, click "Try it"
 > never accept an amount the chain rejects.
 > Live on stagenet: proof verify through a 13-case adversarial matrix (exact,
 > underpaid/overpaid to the piconero, replay, address-bound rejection, malformed
-> returns `invalid`, dead node returns `node-error`, 2-node quorum, at 0-conf and
-> 1-conf), all through the unlock_time gate; the view-only scanner detecting a real
+> returns `invalid`, dead node returns `node-error`, 2-node quorum, and legacy 0-conf
+> normalization to 1-conf), all through the unlock_time gate; the view-only scanner detecting a real
 > payment via the view key alone; two real payments summed on one subaddress to
 > complete an order; the agent end to end (per-order subaddress, settle, one-time
 > signed webhook). Spot-checked against a real mainnet transaction key.

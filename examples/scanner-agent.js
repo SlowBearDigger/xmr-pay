@@ -22,9 +22,13 @@ const crypto = require('crypto');
 const { createScanner } = require('../src/scanner');
 const { createPaymentAgent } = require('../src/agent');
 const { sendWebhook } = require('../src/webhook');
-const { receiptFromOrder, signReceipt } = require('../src/receipt');
 const { generateSigningKey, configFingerprint } = require('../src/config');
 const { nodesFromEnv } = require('../src/nodes');
+const { loadOrderLedger, saveOrderLedger } = require('../src/order-ledger');
+const { createDurableOrder, persistOrderTransition, persistOrderRetirement, buildStatusSnapshot } = require('../src/agent-api');
+const { createAgentHealthMonitor } = require('../src/agent-health');
+const { createReceiptEnsurer } = require('../src/agent-receipt');
+const { assertAgentExposurePolicy } = require('../src/agent-security');
 
 const env = process.env;
 let NODES;
@@ -35,7 +39,8 @@ catch (error) {
 }
 const PORT = Number(env.PORT || 8788);
 const BIND = env.BIND || '127.0.0.1';          // holds the view key → localhost by default
-const TOKEN = env.AGENT_TOKEN || '';            // optional bearer auth for POST /order
+const TOKEN = String(env.AGENT_TOKEN || '').trim();
+assertAgentExposurePolicy({ bind: BIND, token: TOKEN });
 const intEnv = (k, d) => { const n = Number(env[k]); return Number.isFinite(n) ? n : d; };
 
 // PERSIST the order ledger so a restart never forgets which orders are awaiting
@@ -46,23 +51,22 @@ const intEnv = (k, d) => { const n = Number(env[k]); return Number.isFinite(n) ?
 // its scan state too; without it a restarted wallet starts at the tip and can't
 // see a payment that arrived during the downtime.
 const ORDERS_FILE = env.XMR_ORDERS_FILE || 'orders.json';
-function loadOrders() {
-    try { return new Map(JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')).map(o => [o.id, o])); }
-    catch { return new Map(); }
-}
-function saveOrders(store) {
-    try { fs.writeFileSync(ORDERS_FILE, JSON.stringify([...store.values()])); }
-    catch (e) { console.error(`[orders] save failed: ${e.message}`); }
+let ledgerState = null, agent = null;
+function loadOrders() { return loadOrderLedger(ORDERS_FILE); }
+function saveOrders() {
+    if (!ledgerState) throw new Error('order ledger is not loaded');
+    if (agent) ledgerState.usedSubaddressHighWater = agent.usedSubaddressHighWater();
+    return saveOrderLedger(ORDERS_FILE, ledgerState);
 }
 // COALESCED save for routine updates: the poller calls onUpdate once per pending
 // order per tick, so writing the whole ledger each time is O(N) blocking writes
 // per poll. debounce to at most one write per second. (createOrder / onPaid /
 // shutdown still save immediately — those are the transitions worth flushing.)
 let _saveDirty = false, _saveTimer = null;
-function queueSave(store) {
+function queueSave() {
     _saveDirty = true;
     if (_saveTimer) return;
-    _saveTimer = setTimeout(() => { _saveTimer = null; if (_saveDirty) { _saveDirty = false; saveOrders(store); } }, 1000);
+    _saveTimer = setTimeout(() => { _saveTimer = null; if (_saveDirty) { _saveDirty = false; saveOrders(); } }, 1000);
     if (_saveTimer.unref) _saveTimer.unref();
 }
 
@@ -94,9 +98,14 @@ function send(res, code, body) {
     console.log(`scanner up · node ${scanner.node} · view-only · birthday height ${scanner.birthdayHeight}`);
     if (!env.XMR_WALLET_PATH) console.warn('[warn] XMR_WALLET_PATH not set — set it so the wallet keeps its scan state across restarts (orders persist, but a fresh wallet starts at the tip).');
 
-    const store = loadOrders();
+    ledgerState = loadOrders();
+    const store = ledgerState.store;
     let idc = 0; for (const id of store.keys()) { const m = /(\d+)$/.exec(id); if (m && +m[1] > idc) idc = +m[1]; }
     console.log(`orders: ${store.size} reloaded from ${ORDERS_FILE}`);
+    if (ledgerState.recoveredFromBackup) {
+        console.warn(`[orders] recovered generation ${ledgerState.generation} from the durable backup`);
+        saveOrders();
+    }
 
     // merchant signing key for RECEIPTS. it persists so the fingerprint a buyer
     // pins stays stable across restarts; generated once if absent. it is NOT a
@@ -134,25 +143,32 @@ function send(res, code, body) {
             receipt: order.receipt,             // signed receipt envelope (if minted)
         };
     }
-    async function deliverWebhook(orderId) {
+    const webhookDeliveries = new Map();
+    async function deliverWebhookNow(orderId) {
         if (!env.FULFILL_WEBHOOK_URL) return;
         const order = store.get(orderId);
         if (!order || !order.paid || order.webhookDelivered) return;
-        order.webhookAttempts = (order.webhookAttempts || 0) + 1;
+        agent.update(orderId, { webhookAttempts: (order.webhookAttempts || 0) + 1 });
         let res;
         try { res = await sendWebhook(env.FULFILL_WEBHOOK_URL, buildWebhookPayload(order), { secret: env.FULFILL_WEBHOOK_SECRET }); }
         catch (e) { res = { delivered: false, error: e.message }; }
         if (res && res.delivered) {
-            order.webhookDelivered = true; order.webhookNextAt = 0;
+            agent.update(orderId, { webhookDelivered: true, webhookNextAt: 0 });
             console.log(`[webhook] ${orderId} delivered (attempt ${order.webhookAttempts})`);
         } else {
             // capped exponential backoff (5s → … → 30 min ceiling); keep retrying
             // while the order lives in the store. GET /order/:id shows it undelivered.
             const backoff = Math.min(1800000, 5000 * 2 ** Math.min(order.webhookAttempts - 1, 8));
-            order.webhookNextAt = Date.now() + backoff;
+            agent.update(orderId, { webhookNextAt: Date.now() + backoff });
             console.warn(`[webhook] ${orderId} undelivered (attempt ${order.webhookAttempts}, ${(res && (res.status || res.error)) || '?'}) — retry in ${Math.round(backoff / 1000)}s`);
         }
-        saveOrders(store);
+        saveOrders();
+    }
+    function deliverWebhook(orderId) {
+        if (webhookDeliveries.has(orderId)) return webhookDeliveries.get(orderId);
+        const delivery = deliverWebhookNow(orderId).finally(() => webhookDeliveries.delete(orderId));
+        webhookDeliveries.set(orderId, delivery);
+        return delivery;
     }
 
     // ── SSE push (instant detection) ────────────────────────────────────────
@@ -165,9 +181,15 @@ function send(res, code, body) {
     const sseClients = new Map();   // orderId -> Set<res>
     function sseCount() { let n = 0; for (const s of sseClients.values()) n += s.size; return n; }
     async function buildStatus(r) {
-        const dh = await tipHeight(), wh = await walletHeight();
-        const syncing = !r.paid && wh != null && dh != null && (dh - wh) > SYNC_GAP;
-        return { id: r.id, paid: r.paid, status: r.status, amount: r.amount, receivedXmr: r.receivedXmr, lockedXmr: r.lockedXmr, shortfallXmr: r.shortfallXmr, overpaid: !!r.overpaid, overpaidXmr: r.overpaidXmr || '0', confirmations: r.confirmations, minConfirmations: MIN_CONF, tipHeight: dh, walletHeight: wh, syncing, txids: r.txids, webhookDelivered: r.webhookDelivered !== false };
+        const health = await healthMonitor.snapshot();
+        const syncing = !r.paid && health.synced !== true;
+        let current = agent.get(r.id) || r;
+        if (current.syncing !== syncing) {
+            current = agent.update(r.id, { syncing });
+            try { saveOrders(); }
+            catch (error) { error.code = 'ORDER_PERSIST_FAILED'; throw error; }
+        }
+        return buildStatusSnapshot(current, { minConfirmations: MIN_CONF });
     }
     async function pushOrder(id) {
         const set = sseClients.get(id);
@@ -178,9 +200,11 @@ function send(res, code, body) {
         for (const res of set) { try { res.write(`data: ${body}\n\n`); } catch { /* dropped on close */ } }
     }
 
-    const agent = createPaymentAgent({
+    let ensureReceipt = async orderId => agent.get(orderId);
+    agent = createPaymentAgent({
         scanner,
         store,
+        usedSubaddressHighWater: ledgerState.usedSubaddressHighWater,
         idgen: () => `ord_${(++idc).toString(36)}`,
         minConfirmations: intEnv('XMR_MIN_CONFIRMATIONS', 1),
         toleranceXmr: env.XMR_TOLERANCE_XMR || '0',   // (B) accept within this much of the price (dust/fee/rounding); default exact
@@ -195,91 +219,83 @@ function send(res, code, body) {
         // wallet sync holds the lock (set 0 to create one per order on demand).
         subaddressPool: intEnv('XMR_SUBADDRESS_POOL', 8),
         poolLabel: 'order',
-        onUpdate: (o) => { queueSave(store); pushOrder(o.id); },   // coalesced save + instant SSE push to the buyer
+        onUpdate: (o) => { queueSave(); pushOrder(o.id); },   // coalesced save + instant SSE push to the buyer
         // drop unpaid orders older than XMR_EXPIRY_HOURS (0 = never, default). bounds
         // the per-tick work + memory; a late payment still lands on-chain in your
         // wallet — it just won't auto-complete (reconcile from the [expired] log).
         expiryMs: Math.max(0, (Number(env.XMR_EXPIRY_HOURS) || 0) * 3600000),
-        onExpire: (order) => { console.log(`[expired] ${order.id} · unpaid > ${env.XMR_EXPIRY_HOURS}h · dropped`); queueSave(store); },
+        onExpire: (order) => { console.log(`[expired] ${order.id} · unpaid > ${env.XMR_EXPIRY_HOURS}h · dropped`); queueSave(); },
         // retire SETTLED orders too (the store/webhook is the source of truth) so a
         // long-running agent's memory + ledger stay bounded. 0 = keep forever.
         paidRetentionMs: Math.max(0, (Number(env.XMR_PAID_RETENTION_HOURS) || 0) * 3600000),
+        persistRetired: order => persistOrderRetirement({ ledgerState, ledgerFile: ORDERS_FILE, orderId: order.id }),
+        persistPaid: (order) => {
+            if (env.FULFILL_WEBHOOK_URL) {
+                order.webhookDelivered = false;
+                order.webhookAttempts = 0;
+                order.webhookNextAt = 0;
+            }
+            return persistOrderTransition({ ledgerState, ledgerFile: ORDERS_FILE, order });
+        },
         onPaid: async (order) => {
-            saveOrders(store);
-            pushOrder(order.id);   // tell the buyer "paid" INSTANTLY — before the (slower) receipt mint below
+            await pushOrder(order.id);   // tell the buyer "paid" before the slower receipt mint below
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
 
-            // mint + sign the receipt. the merchant signature is the offline leg;
-            // the InProofs are the trustless on-chain leg (best-effort — a failure
-            // never blocks the order, the signed receipt still stands on its own).
             if (receiptKey) {
                 try {
-                    const txProofs = [];
-                    if (env.XMR_RECEIPT_TXPROOF !== '0') {
-                        for (const txid of order.txids) {
-                            try { txProofs.push(await scanner.txProof(txid, order.index)); }
-                            catch (e) { console.warn(`[receipt] tx_proof ${txid} failed: ${e.message}`); }
-                        }
-                    }
-                    const merchant = { fingerprint: receiptFp };
-                    if (env.XMR_MERCHANT_NAME) merchant.name = env.XMR_MERCHANT_NAME;
-                    const signed = signReceipt(receiptFromOrder(order, {
-                        merchant, network: env.XMR_NETWORK || 'mainnet', paidAt: Date.now(), txProofs,
-                    }), receiptKey);
-                    order.receipt = signed;                 // for the webhook payload (onPaid gets a snapshot)
-                    const live = store.get(order.id);        // ALSO persist on the live order so GET /receipt/:id + a reload find it
-                    if (live) live.receipt = signed;
-                    saveOrders(store);
-                    console.log(`[receipt] ${order.id} signed${txProofs.length ? ` + ${txProofs.length} tx_proof(s)` : ''}`);
+                    const current = await ensureReceipt(order.id);
+                    if (current && current.receipt) console.log(`[receipt] ${order.id} signed`);
                 } catch (e) { console.error(`[receipt] ${order.id} mint failed: ${e.message}`); }
             }
 
             if (env.FULFILL_WEBHOOK_URL) {
-                // mark pending on the LIVE order (onPaid gets a snapshot) so the flag
-                // persists + the sweep can re-attempt; then try once immediately.
-                const live = store.get(order.id);
-                if (live) { live.webhookDelivered = false; live.webhookAttempts = 0; live.webhookNextAt = 0; }
                 await deliverWebhook(order.id);
             }
         },
     });
-    agent.start();
+    // Persist any legacy-order migration (revision/minConfirmations/syncing) and
+    // the loaded high-water mark before the API can serve a snapshot.
+    saveOrders();
 
     const MIN_CONF = intEnv('XMR_MIN_CONFIRMATIONS', 1);
-    // cached chain tip so a busy status endpoint doesn't hammer the node — gives
-    // the UI a REAL, live block height to show ("scanning the blockchain").
-    let _tip = { h: 0, at: 0 }, _tipInflight = null;
-    async function tipHeight() {
-        const now = Date.now();
-        if (_tip.h && now - _tip.at < 5000) return _tip.h;
-        // DEDUP the fetch: under a burst of concurrent status polls on a cold/stale
-        // cache, every request would otherwise fire its own /get_height — a
-        // thundering herd against the node. share one in-flight fetch instead.
-        if (_tipInflight) return _tipInflight;
-        // Read through the scanner's authenticated transport, not through the
-        // wallet lock. This keeps health checks responsive for Basic/Digest nodes.
-        _tipInflight = (async () => {
-            try {
-                const h = Number(await scanner.tipHeight());
-                if (Number.isFinite(h) && h > 0) { _tip.h = h; _tip.at = Date.now(); }
-            } catch { /* keep last */ }
-            finally { _tipInflight = null; }
-            return _tip.h || null;
-        })();
-        return _tipInflight;
-    }
-
-    // (A) the scanner's OWN synced height (local wallet read, cached 3s). compared to
-    // the daemon tip it tells whether we're CAUGHT UP — so a behind/just-restarted
-    // agent can say "node catching up" instead of reporting a paid order as pending.
-    let _wh = { h: 0, at: 0 };
-    async function walletHeight() {
-        const now = Date.now();
-        if (_wh.h && now - _wh.at < 3000) return _wh.h;
-        try { const h = await scanner.height(); if (Number.isFinite(h) && h > 0) { _wh.h = h; _wh.at = Date.now(); } } catch { /* keep last */ }
-        return _wh.h || null;
-    }
     const SYNC_GAP = intEnv('XMR_SYNC_GAP', 2);   // blocks behind tip still considered "synced"
+    const healthMonitor = createAgentHealthMonitor({
+        readDaemonHeight: () => scanner.tipHeight(),
+        readWalletHeight: () => scanner.height(),
+        syncGap: SYNC_GAP,
+    });
+
+    ensureReceipt = createReceiptEnsurer({
+        agent,
+        persistOrder: order => persistOrderTransition({ ledgerState, ledgerFile: ORDERS_FILE, order }),
+        receiptKey,
+        receiptFingerprint: receiptFp,
+        scanner,
+        network: env.XMR_NETWORK || 'mainnet',
+        merchantName: env.XMR_MERCHANT_NAME,
+        includeTxProofs: env.XMR_RECEIPT_TXPROOF !== '0',
+        onProofError: (error, txid) => console.warn(`[receipt] tx_proof ${txid} failed: ${error.message}`),
+    });
+    let _receiptRecoveryRunning = false;
+    async function recoverMissingReceipts() {
+        if (!receiptKey || _receiptRecoveryRunning) return;
+        _receiptRecoveryRunning = true;
+        try {
+            for (const order of agent.list()) {
+                if (!order.paid || order.receipt) continue;
+                try {
+                    const recovered = await ensureReceipt(order.id);
+                    if (recovered && recovered.receipt) console.log(`[receipt] ${order.id} recovered`);
+                } catch (error) {
+                    console.error(`[receipt] ${order.id} recovery failed: ${error.message}`);
+                }
+            }
+        } finally {
+            _receiptRecoveryRunning = false;
+        }
+    }
+    await recoverMissingReceipts();
+    agent.start();
 
     const server = http.createServer(async (req, res) => {
         const url = req.url.split('?')[0];
@@ -290,9 +306,20 @@ function send(res, code, body) {
                 // lost payment (the funds are on-chain; the order is paid).
                 let undeliveredWebhooks = 0;
                 if (env.FULFILL_WEBHOOK_URL) for (const o of store.values()) if (o.paid && o.webhookDelivered === false) undeliveredWebhooks++;
-                const dh = await tipHeight(), wh = await walletHeight();
-                const synced = (wh != null && dh != null) ? (dh - wh) <= SYNC_GAP : null;
-                return send(res, 200, { ok: true, network: env.XMR_NETWORK || 'mainnet', node: scanner.node, viewOnly: scanner.viewOnly, orders: agent.list().length, pool: agent.poolReady(), receipt: receiptFp || null, undeliveredWebhooks, streamClients: sseCount(), walletHeight: wh, daemonHeight: dh, synced });
+                const health = await healthMonitor.snapshot();
+                return send(res, 200, {
+                    ok: health.synced !== null,
+                    network: env.XMR_NETWORK || 'mainnet',
+                    node: scanner.node,
+                    viewOnly: scanner.viewOnly,
+                    orders: agent.list().length,
+                    pool: agent.poolReady(),
+                    receipt: receiptFp || null,
+                    undeliveredWebhooks,
+                    streamClients: sseCount(),
+                    ...health,
+                    healthState: health.state,
+                });
             }
             if (req.method === 'POST' && url === '/order') {
                 if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
@@ -301,10 +328,9 @@ function send(res, code, body) {
                     let body; try { body = JSON.parse(raw || '{}'); } catch { return send(res, 400, { error: 'bad json' }); }
                     if (!body.amount) return send(res, 400, { error: 'amount is required' });
                     try {
-                        const order = await agent.createOrder({ id: body.id, amount: String(body.amount), label: body.label });
-                        saveOrders(store);   // persist immediately so a restart right after won't forget it
-                        send(res, 200, { id: order.id, address: order.address, amount: order.amount, status: order.status, birthdayHeight: order.birthdayHeight });
-                    } catch (e) { send(res, 409, { error: e.message }); }
+                        const order = await createDurableOrder({ agent, ledgerState, ledgerFile: ORDERS_FILE, order: { id: body.id, amount: String(body.amount), label: body.label } });
+                        send(res, 200, await buildStatus(order));
+                    } catch (e) { send(res, e && e.code === 'ORDER_PERSIST_FAILED' ? 500 : 409, { error: e.message }); }
                 });
                 return;
             }
@@ -321,7 +347,12 @@ function send(res, code, body) {
                 if (!r0) return send(res, 404, { error: 'unknown order' });
                 res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
                 res.write('retry: 3000\n\n');
-                buildStatus(r0).then(s => { try { res.write(`data: ${JSON.stringify(s)}\n\n`); } catch { /* closed */ } });
+                buildStatus(r0)
+                    .then(s => { try { res.write(`data: ${JSON.stringify(s)}\n\n`); } catch { /* closed */ } })
+                    .catch(() => {
+                        try { res.write('event: error\ndata: {"error":"order state unavailable"}\n\n'); res.end(); }
+                        catch { /* closed */ }
+                    });
                 let set = sseClients.get(id); if (!set) { set = new Set(); sseClients.set(id, set); }
                 set.add(res);
                 agent.kick();   // a watcher just arrived — poll fast now
@@ -370,7 +401,12 @@ function send(res, code, body) {
         if (_webhookSweep.unref) _webhookSweep.unref();
     }
 
-    const _persist = setInterval(() => saveOrders(store), 30000); if (_persist.unref) _persist.unref();
+    if (receiptKey) {
+        const _receiptSweep = setInterval(() => { recoverMissingReceipts(); }, intEnv('XMR_RECEIPT_SWEEP_MS', 30000));
+        if (_receiptSweep.unref) _receiptSweep.unref();
+    }
+
+    const _persist = setInterval(() => saveOrders(), 30000); if (_persist.unref) _persist.unref();
     // persist the WALLET cache too (subaddress indices + scan progress). without
     // this, a restart re-creates subaddresses from index 1 — reusing a still-
     // pending order's address — and rescans from the restore height every time.
@@ -383,7 +419,7 @@ function send(res, code, body) {
     let _down = false;
     const shutdown = () => {
         if (_down) return; _down = true;
-        agent.stop(); saveOrders(store);
+        agent.stop(); saveOrders();
         scanner.close(true).finally(() => process.exit(0));
     };
     process.on('SIGINT', shutdown);

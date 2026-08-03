@@ -37,8 +37,8 @@ state, and `toInvoiceState` returns `null` for them.
 Settlement is final at `minConfirmations`. A chain reorganisation **deeper** than that threshold
 can, in principle, un-spend an on-chain payment, but the order stays `settled` — like every
 payment processor, a captured sale is not auto-reversed. The threshold IS the value-at-risk knob:
-raise it for high-value orders (Monero treats ~10 as fully unlocked/final). `0` accepts a payment
-the moment it's seen on-chain; only do that for low-value goods.
+raise it for high-value orders (Monero treats ~10 as fully unlocked/final). Values below `1`
+are normalized to `1`; mempool observations remain `processing` and never settle an order.
 
 ### Proof-mode caveat
 

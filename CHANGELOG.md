@@ -4,6 +4,22 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-08-02
+
+### Security
+
+- The reference agent now persists orders, a monotonic subaddress high-water mark and revisioned settlement policy in an atomic versioned ledger with a recovery copy. Existing corrupt ledgers fail closed instead of silently starting empty.
+- `POST /order` responds only after the order and subaddress allocation are durable.
+- Mempool transfers remain provisional. Settlement now requires at least one block confirmation, even when a legacy configuration requested zero. Locked, malformed and double-spend-seen transfers remain rejected.
+- The reference agent persists the paid transition before exposing it through GET or SSE and before invoking fulfillment. Disk failures keep the order visibly unpaid and fail closed.
+- Paid-order retirement is durable before an order disappears from the live ledger, preventing retired orders from reappearing after restart.
+
+### Fixed
+
+- The CLI and legacy order migration normalize `minConfirmations: 0` to `1`.
+- Each order retains its original confirmation policy after restarts and configuration changes.
+- POST, GET and SSE now use one full revisioned order snapshot, preventing stale updates from reversing payment progress.
+
 ## [1.1.0] - 2026-06-21
 
 ### Added

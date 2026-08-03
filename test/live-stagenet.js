@@ -141,9 +141,9 @@ async function openConnected(walletPath, password) {
         } else {
         check('txkey: fresh tx not yet paid (mempool/unconfirmed)', !early.paid && ['mempool', 'unconfirmed'].includes(early.status), early.status);
 
-        // a 0-conf-tolerant merchant may accept it from the pool
+        // Legacy 0-conf input is normalized to one authoritative confirmation.
         let zeroConf = await verifyPayment({ ...keyArgs, minConfirmations: 0 });
-        check('txkey: minConfirmations=0 accepts mempool', zeroConf.paid || zeroConf.status === 'unconfirmed', zeroConf.status);
+        check('txkey: minConfirmations=0 keeps fresh payment provisional', !zeroConf.paid && ['mempool', 'unconfirmed'].includes(zeroConf.status), zeroConf.status);
 
         // poll to first confirmation (stagenet ~2 min blocks; cap ~7 min)
         process.stdout.write('polling for first confirmation');

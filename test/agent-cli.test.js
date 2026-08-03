@@ -1,7 +1,7 @@
 // the npx wizard CLI — config→env mapping + the line reader.
 //   node test/agent-cli.test.js
 
-const { applyConfig, hiddenAnswer, npmInstallEnv } = require('../bin/agent.js');
+const { DEFAULT_ORDER_POLICY, applyConfig, hiddenAnswer, npmInstallEnv } = require('../bin/agent.js');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`); };
@@ -29,6 +29,12 @@ const e2 = {};
 applyConfig({ network: 'mainnet', address: '4a', viewKey: 'b'.repeat(64), nodes: 'http://n', token: 't', port: 8788 }, '/d', e2);
 ok('no webhook → FULFILL_WEBHOOK_URL unset', e2.FULFILL_WEBHOOK_URL === undefined);
 ok('defaults: minConf 1, pool 8 when absent', e2.XMR_MIN_CONFIRMATIONS === '1' && e2.XMR_SUBADDRESS_POOL === '8');
+
+const instant = {};
+applyConfig({ ...cfg, minConfirmations: 0 }, '/data/xmr', instant);
+ok('legacy instant settlement is normalized to minConfirmations=1', instant.XMR_MIN_CONFIRMATIONS === '1');
+ok('wizard defaults keep unpaid and paid orders for late POS reconciliation',
+    DEFAULT_ORDER_POLICY && DEFAULT_ORDER_POLICY.expiryHours === 0 && DEFAULT_ORDER_POLICY.paidRetentionHours === 0);
 
 // existing env wallet path is respected (operator override wins)
 const e3 = { XMR_WALLET_PATH: '/custom/w' };

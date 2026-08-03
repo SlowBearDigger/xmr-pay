@@ -40,6 +40,9 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('createOrder returns a per-order subaddress', o.address === 'sub_1' && o.index === 1, JSON.stringify(o));
     ok('new order starts pending, shortfall = full amount', o.status === 'pending' && o.shortfallXmr === '0.1');
     ok('order carries its birthday height', o.birthdayHeight === 1001);
+    ok('new order starts with a persisted nonnegative revision', o.revision === 0);
+    ok('new order persists revisioned confirmation and syncing policy', o.minConfirmations === 1 && o.syncing === false);
+    ok('callers cannot overwrite the monotonic revision counter', agent.update('ord_1', { revision: 99 }).revision === 0);
 
     // amount canonicalization: a float input that stringifies to >12 decimals (0.1+0.2 →
     // "0.30000000000000004") must be stored as a canonical ≤12-decimal string, or checkOrder's
@@ -52,22 +55,26 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
 
     let r = await agent.check('ord_1');
     ok('check with no payment → pending', r.status === 'pending' && !r.paid);
+    ok('an identical payment snapshot does not advance revision', r.revision === 0);
 
     // first installment: 0.05 of 0.1
     ms.rowsByIndex.set(1, [row(50000000000, { id: 'a' })]);
     r = await agent.check('ord_1');
     ok('partial payment → partial, shortfall 0.05, not paid', r.status === 'partial' && r.shortfallXmr === '0.05' && !r.paid, r.shortfallXmr);
+    ok('an authoritative payment-state mutation advances revision once', r.revision === 1);
     ok('onPaid not fired on a partial', paidCalls.length === 0);
 
     // top-up: a SECOND installment 0.05 → sum 0.1 → paid
     ms.rowsByIndex.set(1, [row(50000000000, { id: 'a' }), row(50000000000, { id: 'b' })]);
     r = await agent.check('ord_1');
     ok('top-up completes the order (sum 0.1) → paid, shortfall 0', r.paid && r.status === 'paid' && r.shortfallXmr === '0', r.status);
+    ok('the paid transition advances revision once', r.revision === 2);
     ok('onPaid fired exactly once on the pending→paid transition', paidCalls.length === 1 && paidCalls[0] === 'ord_1');
 
     // idempotent — re-checking a paid order does not double-fire
     r = await agent.check('ord_1');
     ok('re-check stays paid, onPaid NOT fired again', r.paid && paidCalls.length === 1);
+    ok('an identical paid replay leaves revision stable', r.revision === 2);
 
     // poller hits only pending orders
     await agent.createOrder({ id: 'ord_2', amount: '0.2' });
@@ -109,6 +116,95 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('rejected amounts allocate NO subaddress + create NO order', agent.list().length === before && ms.newSubCalls === subBefore);
 
     agent.stop();
+
+    // Zero-conf remains a supported policy, but a replaceable mempool sighting is
+    // provisional. A later double-spend signal must be observed before any
+    // irreversible fulfillment callback can run.
+    {
+        const rowsByIndex = new Map();
+        let nextIndex = 0;
+        const paid = [];
+        const zeroConfScanner = {
+            async newSubaddress() { const index = ++nextIndex; return { address: `z${index}`, index }; },
+            async checkOrder({ subaddressIndex, amount, minConfirmations }) {
+                return summarizeTransfers(rowsByIndex.get(subaddressIndex) || [], xmrToPico(amount), minConfirmations);
+            },
+        };
+        const zeroConfAgent = createPaymentAgent({ scanner: zeroConfScanner, minConfirmations: 0, onPaid: order => paid.push(order.id) });
+        const zeroConfOrder = await zeroConfAgent.createOrder({ id: 'zero-conf-conflict', amount: '0.1' });
+        ok('0-conf policy is normalized to one authoritative confirmation', zeroConfOrder.minConfirmations === 1, `min=${zeroConfOrder.minConfirmations}`);
+        rowsByIndex.set(zeroConfOrder.index, [{ txid: 'replaceable', amountPico: 100000000000n, confirmations: 0, inPool: true, locked: false }]);
+
+        const provisional = await zeroConfAgent.check(zeroConfOrder.id);
+        ok('0-conf mempool sighting remains provisional and cannot fulfill', !provisional.paid && provisional.status === 'mempool' && paid.length === 0, provisional.status);
+
+        rowsByIndex.set(zeroConfOrder.index, [{ txid: 'replaceable', amountPico: 100000000000n, confirmations: 0, inPool: true, locked: false, doubleSpendSeen: true }]);
+        const contested = await zeroConfAgent.check(zeroConfOrder.id);
+        ok('later mempool double-spend stays visible without irreversible fulfillment', !contested.paid && contested.status === 'mempool' && paid.length === 0, contested.status);
+        zeroConfAgent.stop();
+    }
+
+    // A paid result is staged until its durable transition succeeds. Persistence
+    // failure must reject the check, keep GET/SSE-visible state unpaid, and never
+    // emit fulfillment.
+    {
+        let paidCalls = 0;
+        const persistenceError = new Error('disk full');
+        persistenceError.code = 'ORDER_PERSIST_FAILED';
+        const paidScanner = {
+            async newSubaddress() { return { address: 'durable_1', index: 1 }; },
+            async checkOrder() {
+                return { paid: true, status: 'paid', receivedXmr: 0.1, receivedPico: '100000000000', pendingXmr: 0, lockedXmr: 0, shortfallXmr: '0', overpaid: false, overpaidXmr: '0', confirmations: 1, txids: ['durable-tx'] };
+            },
+        };
+        const durableAgent = createPaymentAgent({
+            scanner: paidScanner,
+            minConfirmations: 1,
+            persistPaid: async () => { throw persistenceError; },
+            onPaid: () => { paidCalls++; },
+        });
+        await durableAgent.createOrder({ id: 'persist-fails', amount: '0.1' });
+        let rejected;
+        try { await durableAgent.check('persist-fails'); }
+        catch (error) { rejected = error; }
+        await Promise.resolve();
+        const visible = durableAgent.get('persist-fails');
+        ok('paid persistence failure is propagated to the caller', rejected === persistenceError);
+        ok('paid persistence failure never becomes GET/SSE-visible', visible && !visible.paid && visible.status === 'pending', JSON.stringify(visible));
+        ok('paid persistence failure never emits onPaid fulfillment', paidCalls === 0, `calls=${paidCalls}`);
+        durableAgent.stop();
+    }
+
+    // Retention is also a durable deletion. If that persistence step fails, the
+    // live order must remain available so a restart cannot resurrect a record
+    // that the running process had already hidden.
+    {
+        let clock = 0;
+        const retirementError = new Error('retirement save failed');
+        retirementError.code = 'ORDER_PERSIST_FAILED';
+        const paidScanner = {
+            async sync() {},
+            async newSubaddress() { return { address: 'retire_1', index: 1 }; },
+            async checkOrder() { return { paid: true, status: 'paid', receivedXmr: 0.1, receivedPico: '100000000000', shortfallXmr: '0', confirmations: 1, txids: ['retire-tx'] }; },
+        };
+        const retiringAgent = createPaymentAgent({
+            scanner: paidScanner,
+            minConfirmations: 1,
+            paidRetentionMs: 1,
+            now: () => clock,
+            persistPaid: async () => {},
+            persistRetired: async () => { throw retirementError; },
+        });
+        await retiringAgent.createOrder({ id: 'retirement-fails', amount: '0.1' });
+        await retiringAgent.check('retirement-fails');
+        clock = 2;
+        let rejected;
+        try { await retiringAgent.tick(); }
+        catch (error) { rejected = error; }
+        ok('paid-retirement persistence failure is propagated', rejected === retirementError);
+        ok('failed durable retirement leaves the paid order visible for retry', retiringAgent.get('retirement-fails')?.paid === true);
+        retiringAgent.stop();
+    }
 
     // --- subaddress pool: pre-warm + instant handout + background refill ---
     const ms2 = mockScanner();
@@ -153,6 +249,19 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
     ok('payment to index 1 credits ONLY the order that owns it', rOld.paid === true && rFresh.paid === false);
     aC.stop();
 
+    // Durable high-water mark survives order retirement and a stale wallet cache.
+    // Every candidate at or below the historic maximum must be burned, even when
+    // there is no retained order left to seed usedIndexes.
+    const msH = mockScanner();
+    const aH = createPaymentAgent({ scanner: msH, store: new Map(), usedSubaddressHighWater: 20, minConfirmations: 1 });
+    const afterHistory = await aH.createOrder({ id: 'after-history', amount: '0.02' });
+    ok('stale wallet candidates at/below durable high-water are never rebound', afterHistory.index === 21 && msH.newSubCalls === 21, `idx=${afterHistory.index} calls=${msH.newSubCalls}`);
+    ok('agent exposes the advanced high-water for durable persistence', aH.usedSubaddressHighWater() === 21);
+    let historicBindRejected = false;
+    try { await aH.createOrder({ id: 'historic-bind', amount: '0.02', index: 19 }); } catch { historicBindRejected = true; }
+    ok('explicit binding cannot reuse a retired historic index', historicBindRejected);
+    aH.stop();
+
     // CONCURRENCY: two simultaneous binds of the SAME explicit index must not both
     // win (a check-then-act TOCTOU around the addressAt await would double-credit).
     const msR = mockScanner();
@@ -194,6 +303,27 @@ const row = (amountPico, opts = {}) => ({ txid: (opts.id || 'tx') + '_' + amount
         ok('onPaid fired exactly once for the newly-paid order', paid.length === 1 && paid[0] === 'b2');
         await a.tick();
         ok('a settled order is NOT re-checked — the batch only gets the 2 still-pending', ms._last.length === 2 && !ms._last.find(x => x.id === 'b2'));
+        a.stop();
+    }
+
+    // A config change after restart must not silently change the confirmation
+    // policy of existing orders. The batch path carries each persisted policy.
+    {
+        const store = new Map([
+            ['policy-0', { id: 'policy-0', amount: '0.1', address: 's1', index: 1, paid: false, status: 'pending', state: 'created', receivedXmr: 0, shortfallXmr: '0.1', confirmations: 0, minConfirmations: 0, syncing: false, txids: [], revision: 0 }],
+            ['policy-1', { id: 'policy-1', amount: '0.1', address: 's2', index: 2, paid: false, status: 'pending', state: 'created', receivedXmr: 0, shortfallXmr: '0.1', confirmations: 0, minConfirmations: 1, syncing: false, txids: [], revision: 0 }],
+        ]);
+        let seen;
+        const ms = {
+            async sync() {}, async newSubaddress() { return { address: 's3', index: 3 }; }, async checkOrder() {},
+            async checkOrders(list) {
+                seen = list.map(order => order.minConfirmations);
+                return new Map(list.map(order => [order.id, { paid: false, status: 'pending', receivedXmr: 0, pendingXmr: 0, lockedXmr: 0, shortfallXmr: '0.1', confirmations: 0, txids: [] }]));
+            },
+        };
+        const a = createPaymentAgent({ scanner: ms, store, minConfirmations: 9 });
+        await a.tick();
+        ok('batch scan normalizes unsafe persisted zero-conf policy to one', JSON.stringify(seen) === '[1,1]', JSON.stringify(seen));
         a.stop();
     }
 

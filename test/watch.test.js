@@ -2,7 +2,8 @@
 //   node test/watch.test.js
 
 const http = require('http');
-const { createWatcher } = require('../src/watch');
+const { createWatcher, summarizeTransfers } = require('../src/watch');
+const { xmrToPico } = require('../src/verify');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`); };
@@ -28,6 +29,9 @@ const TRANSFERS = {
     // 9: a CONFIRMED payment the daemon flagged double_spend_seen — contested money.
     //    must be HELD (never credited) until the flag clears, even past minConf.
     9: { in: [{ txid: 'cd'.repeat(32), amount: 100000000000, confirmations: 8, type: 'in', unlock_time: 0, locked: false, double_spend_seen: true }], pool: [] },
+    10: { in: [], pool: [{ txid: '1a'.repeat(32), amount: 100000000000, confirmations: 0, type: 'pool', unlock_time: 3000000, locked: true }] },
+    11: { in: [], pool: [{ txid: '1b'.repeat(32), amount: 100000000000, confirmations: 0, type: 'pool', unlock_time: 0, locked: false, double_spend_seen: true }] },
+    12: { in: [{ txid: '1c'.repeat(32), amount: 100000000000, confirmations: 0, type: 'in', unlock_time: 0, locked: false }], pool: [] },
 };
 
 const server = http.createServer((req, res) => {
@@ -79,6 +83,21 @@ const server = http.createServer((req, res) => {
 
     r = await w.checkOrder({ subaddressIndex: 4, amount: '0.1' });
     ok('pool-only → mempool', !r.paid && r.status === 'mempool');
+
+    r = await w.checkOrder({ subaddressIndex: 4, amount: '0.1', minConfirmations: 0 });
+    ok('clean exact mempool payment stays provisional when minConfirmations=0', !r.paid && r.status === 'mempool' && r.confirmations === 0 && r.pendingXmr === 0.1, r.status);
+
+    r = await w.checkOrder({ subaddressIndex: 10, amount: '0.1', minConfirmations: 0 });
+    ok('locked mempool transfer stays rejected at minConfirmations=0', !r.paid && r.status === 'locked', r.status);
+
+    r = await w.checkOrder({ subaddressIndex: 11, amount: '0.1', minConfirmations: 0 });
+    ok('double-spend-seen mempool transfer stays rejected at minConfirmations=0', !r.paid && r.status === 'mempool', r.status);
+
+    r = await w.checkOrder({ subaddressIndex: 12, amount: '0.1', minConfirmations: 0 });
+    ok('zero-confirmation result is never authoritative even outside the pool bucket', !r.paid && r.confirmations === 0, r.status);
+
+    const invalid = summarizeTransfers([{ txid: 'bad', amountPico: -1n, confirmations: 0, inPool: true, locked: false }], xmrToPico('0.1'), 0);
+    ok('invalid negative mempool transfer stays rejected at minConfirmations=0', !invalid.paid && invalid.status === 'pending');
 
     r = await w.checkOrder({ subaddressIndex: 5, amount: '0.1' });
     ok('time-locked outputs never count as paid', !r.paid && r.status === 'locked', r.reason);

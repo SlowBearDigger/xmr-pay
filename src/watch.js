@@ -97,8 +97,8 @@ function dedupByTxid(rows) {
 }
 
 function summarizeTransfers(rows, expectedPico, minConfirmations = 1, tolerancePico = 0n) {
-    // clamp: a negative minConfirmations would credit mempool/0-conf txs regardless of intent.
-    minConfirmations = Math.max(0, minConfirmations | 0);
+    // Zero-confirmation observations are replaceable and never authoritative.
+    minConfirmations = Math.max(1, minConfirmations | 0);
     // dedup BEFORE accounting so a tx that appears twice in one poll is counted once,
     // independent of row order (see dedupByTxid / moreCreditable).
     rows = dedupByTxid(rows);
@@ -121,6 +121,9 @@ function summarizeTransfers(rows, expectedPico, minConfirmations = 1, toleranceP
         // contested money. hold it as pending (never credit) until the flag clears
         // (it does once the tx is firmly in the chain). protects a low-minConf
         // merchant from a reorg-double-spend that a plain confirmation count misses.
+        // A replaceable mempool observation is always provisional. Legacy zero
+        // confirmation input was normalized above; locked,
+        // double-spend-seen, malformed, and negative rows remain held or rejected.
         if (!t.inPool && !t.doubleSpendSeen && confs >= minConfirmations) {
             confirmedSum += amt;
             minConfs = Math.min(minConfs, confs);

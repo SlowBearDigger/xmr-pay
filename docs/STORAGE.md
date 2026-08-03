@@ -12,8 +12,10 @@ authoritative vs. reconstructable, and how to swap in your own store.
   (zero-dependency) setup:
   1. an **order ledger** (which order ⇢ which subaddress, amount, status), and
   2. the **wallet scan cache** (which blocks were scanned, transfers seen).
-- The order ledger is just a `store` you inject. Default in the example is a
-  flat JSON file; swap in Redis / Postgres / SQLite by passing your own.
+- The order ledger uses a Map-like `store`. The reference agent wraps it in a
+  versioned, atomic JSON envelope with a recovery copy. A custom integration can
+  use Redis, Postgres or SQLite, but it must preserve the same durability and
+  never-reuse guarantees.
 
 ---
 
@@ -44,14 +46,34 @@ Each entry is a plain order object:
   "receivedXmr": 0,
   "shortfallXmr": "0.01",
   "confirmations": 0,
-  "txids": []
+  "minConfirmations": 1,
+  "syncing": false,
+  "txids": [],
+  "revision": 0
 }
 ```
 
-`examples/scanner-agent.js` persists this to a JSON file
-(`XMR_ORDERS_FILE`, default `orders.json`): loaded at boot, saved on every
-create / update / paid, on `SIGINT`, and every 30 s. Zero dependencies, fine for
-small/medium volume.
+`examples/scanner-agent.js` persists the orders and the highest subaddress index
+ever allocated in `XMR_ORDERS_FILE` (default `orders.json`):
+
+```json
+{
+  "version": 1,
+  "generation": 42,
+  "usedSubaddressHighWater": 87,
+  "orders": []
+}
+```
+
+The reference writer creates a mode-600 temporary file, flushes it, atomically
+renames it and keeps `orders.json.bak` as a second valid generation. Startup
+selects the newest valid generation. If files exist but neither validates, the
+agent stops instead of starting with an empty ledger. A legacy bare-array ledger
+is migrated on its first successful startup.
+
+Order creation is acknowledged only after the envelope is durable. The
+high-water mark never moves backwards when old orders are retired, so a late
+payment to an old subaddress can never settle a new order.
 
 ### 2. The wallet scan cache (`XMR_WALLET_PATH`)
 
@@ -149,12 +171,15 @@ the agent persists its ledger too.
 
 1. **Blockchain** — the funds. Absolute.
 2. **Order DB** (WP MySQL, or your system) — fulfilment state.
-3. **Agent store** (`orders.json` / your DB) — a **reconstructable cache**: it
-   maps order ids to subaddresses and caches detection state.
+3. **Agent store** (`orders.json` / your DB): the durable order-to-subaddress
+   mapping and allocation high-water mark. On-chain funds survive its loss, but
+   safe automatic matching and address non-reuse do not.
 
 ## Backups & ops
 
-- Back up `XMR_ORDERS_FILE` and the `XMR_WALLET_PATH` directory together.
+- Back up the entire `XMR_PAY_DIR` while the agent is stopped. This keeps the
+  primary ledger, recovery copy, wallet cache, configuration and receipt keys
+  together.
 - The wallet cache can be rebuilt from the keys + `XMR_RESTORE_HEIGHT` (re-scan),
   but that costs a full re-sync — backing it up avoids that.
 - **Always set `XMR_RESTORE_HEIGHT`** to the address' creation height (or a tip

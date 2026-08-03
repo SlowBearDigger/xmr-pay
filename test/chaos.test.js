@@ -90,10 +90,11 @@ const base = { url: 'http://127.0.0.1:18083', txid: TXID, proof: PROOF, address:
         r = await verifyPaymentViaRpc({ ...base, minConfirmations: 2 });
         ok('reorg: confirmations vanish → un-pays on re-check (mempool)', !r.paid && r.status === 'mempool', r.status);
     });
-    // a 0-conf-tolerant merchant opts into reorg risk explicitly — and is told.
+    // Legacy 0-conf input is accepted as configuration but normalized to the
+    // minimum authoritative threshold, so mempool remains provisional.
     await withNet({ check_tx_proof: good({ confirmations: 0, in_pool: true }), get_transfer_by_txid: unlocked }, async () => {
         const r = await verifyPaymentViaRpc({ ...base, minConfirmations: 0 });
-        ok('delayed: minConfirmations:0 accepts mempool (opt-in risk)', r.paid, r.status);
+        ok('delayed: minConfirmations:0 keeps mempool provisional', !r.paid && r.status === 'mempool', r.status);
     });
 
     // ── 2 · node / wallet-rpc failures ─────────────────────────────────────

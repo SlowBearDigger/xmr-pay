@@ -5,8 +5,8 @@ life:
 
 | Piece | Solves | State |
 |---|---|---|
-| `xmr-pay` (this repo) | online checkout: links, QR, widget, proof/watch verification, signed configs | tested, near publishable |
-| `xmretail-pos` | in-person sales: browser POS, view-only wallet, per-sale subaddresses, inventory | working prototype |
+| `xmr-pay` (this repo) | online checkout: links, QR, widget, proof/watch verification, signed configs | npm package `1.3.1`; library, agent, security and compatibility tests are present |
+| `xmretail-pos` | in-person sales: browser POS, XMRPay agent integration, per-sale subaddresses, inventory | maintained separately with unit and browser launch-hardening tests |
 | GoXMR Pay (goxmr.click) | hosted gateway | live, superseded by the lib direction |
 
 ## Why a suite makes sense
@@ -45,10 +45,10 @@ All three are sovereign: nothing routes through goxmr.
 
 ## What not to do yet
 
-Don't merge the POS codebase in. It's a young prototype; coupling it now
-drags its churn into a library that's nearly stable. Sequence instead:
+Don't merge the POS codebase in. The projects have separate release, storage and
+operational boundaries. Extract shared primitives through versioned interfaces instead:
 
-1. Publish `xmr-pay` standalone.
+1. Maintain `xmr-pay` as a standalone package.
 2. Extract what the POS duplicates into `core`, make the POS consume it.
    Its cypherpunk look maps 1:1 onto the `brutal` skin tokens.
 3. Decide branding for the umbrella (the GOXMR look is now an opt-in skin,

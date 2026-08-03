@@ -1,6 +1,11 @@
 node_modules/
 .DS_Store
 *.log
+xmr-pay-data/
+*.keys
+*.pem
+orders.json
+orders.json.bak
 
 # release artifacts live on the releases page, not in the tree
 SHA256SUMS

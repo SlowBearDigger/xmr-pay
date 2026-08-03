@@ -248,7 +248,8 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
             const tolPico = xmrToPico(toleranceXmr || '0');
             for (const o of list) {
                 const rows = creditableRows(byIndex.get(o.index) || [], o.birthdayHeight != null ? o.birthdayHeight : null);
-                out.set(o.id, summarizeTransfers(rows, xmrToPico(o.amount), minConfirmations, tolPico));
+                const orderMinConfirmations = Number.isSafeInteger(o.minConfirmations) && o.minConfirmations >= 0 ? o.minConfirmations : minConfirmations;
+                out.set(o.id, summarizeTransfers(rows, xmrToPico(o.amount), orderMinConfirmations, tolPico));
             }
             return out;
         },

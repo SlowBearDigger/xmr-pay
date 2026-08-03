@@ -20,6 +20,7 @@ const { requestNode } = require('../src/node-transport');
 
 const DATA_DIR = process.env.XMR_PAY_DIR || path.resolve(process.cwd(), 'xmr-pay-data');
 const CONFIG = path.join(DATA_DIR, 'config.json');
+const DEFAULT_ORDER_POLICY = Object.freeze({ expiryHours: 0, paidRetentionHours: 0 });
 
 const A = { rst: '\x1b[0m', o: '\x1b[38;5;208m', dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', r: '\x1b[31m' };
 const say = (s = '') => console.log(s);
@@ -159,12 +160,10 @@ async function wizard() {
     const webhookUrl = await ask(rd,'Store webhook URL (blank to add later)', { def: '' });
     const port = await ask(rd,'Port', { def: '8788', validate: a => /^\d+$/.test(a) ? null : 'a port number' });
     const toleranceXmr = await ask(rd,'Underpayment tolerance in XMR', { def: '0', hint: 'accept if the buyer is short by up to this (dust/fee/rounding); 0 = exact', validate: a => /^\d+(\.\d{1,12})?$/.test(a) ? null : 'an XMR amount like 0 or 0.0001' });
-    // settlement speed = how many confirmations before an order is "paid" (the
-    // value-at-risk knob, like BTCPay's SpeedPolicy). instant accepts a mempool tx
-    // (0-conf) — still gated by double_spend_seen + unlock_time, so it's safer than
-    // a naive 0-conf, but a mempool tx can still be dropped; use it for small/digital.
-    const speed = await ask(rd,'Settlement speed', { def: 'fast', hint: 'instant = 0-conf, accept on sight (~instant, small amounts) · fast = 1 block (~2 min) · secure = 10 blocks (fully unlocked)', validate: a => ['instant', 'fast', 'secure'].includes(a) ? null : 'instant, fast, or secure' });
-    const minConfirmations = speed === 'instant' ? 0 : speed === 'secure' ? 10 : 1;
+    // Settlement never authorizes a replaceable mempool observation. Keep the
+    // legacy "instant" choice accepted, but normalize it to the first block.
+    const speed = await ask(rd,'Settlement speed', { def: 'fast', hint: 'instant/fast = 1 block (~2 min) · secure = 10 blocks (fully unlocked)', validate: a => ['instant', 'fast', 'secure'].includes(a) ? null : 'instant, fast, or secure' });
+    const minConfirmations = speed === 'secure' ? 10 : 1;
     rd.close();
 
     // restore height = the node's current tip, so it scans from NOW — instant, no
@@ -189,8 +188,7 @@ async function wizard() {
         webhookSecret: webhookUrl ? 'whsec_' + crypto.randomBytes(16).toString('hex') : undefined,
         token: crypto.randomBytes(16).toString('hex'),
         port: Number(port), minConfirmations, pool: 8, toleranceXmr,
-        expiryHours: 24,           // drop unpaid orders after a day (bounds work + memory; 0 = never)
-        paidRetentionHours: 168,   // retire settled orders after a week (store stays bounded; 0 = keep)
+        ...DEFAULT_ORDER_POLICY,
     };
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2), { mode: 0o600 });
@@ -264,7 +262,7 @@ function applyConfig(cfg, dataDir = DATA_DIR, e = process.env) {
     if (cfg.webhookSecret) e.FULFILL_WEBHOOK_SECRET = cfg.webhookSecret;
     e.AGENT_TOKEN = cfg.token || '';
     e.PORT = String(cfg.port || 8788);
-    e.XMR_MIN_CONFIRMATIONS = String(cfg.minConfirmations || 1);
+    e.XMR_MIN_CONFIRMATIONS = String(Math.max(1, Number(cfg.minConfirmations == null ? 1 : cfg.minConfirmations) | 0));
     if (cfg.toleranceXmr != null && cfg.toleranceXmr !== '') e.XMR_TOLERANCE_XMR = String(cfg.toleranceXmr);
     e.XMR_SUBADDRESS_POOL = String(cfg.pool || 8);
     if (cfg.expiryHours != null) e.XMR_EXPIRY_HOURS = String(cfg.expiryHours);
@@ -296,7 +294,7 @@ async function main() {
     start();
 }
 
-module.exports = { applyConfig, hiddenAnswer, makeReader, npmInstallEnv, probeNodeHeights };  // for tests; CLI only runs when invoked directly
+module.exports = { DEFAULT_ORDER_POLICY, applyConfig, hiddenAnswer, makeReader, npmInstallEnv, probeNodeHeights };  // for tests; CLI only runs when invoked directly
 
 if (require.main === module) {
     main().catch(e => { console.error(e); process.exit(1); });
