@@ -6,7 +6,7 @@ life:
 | Piece | Solves | State |
 |---|---|---|
 | `xmr-pay` (this repo) | online checkout: links, QR, widget, proof/watch verification, signed configs | npm package `1.3.1`; library, agent, security and compatibility tests are present |
-| `xmretail-pos` | in-person sales: browser view-only scanning, per-sale subaddresses, inventory | maintained separately with unit and browser launch-hardening tests |
+| `xmretail-pos` | in-person sales: browser POS, XMRPay agent integration, per-sale subaddresses, inventory | maintained separately with unit and browser launch-hardening tests |
 | GoXMR Pay (goxmr.click) | hosted gateway | live, superseded by the lib direction |
 
 ## Why a suite makes sense
