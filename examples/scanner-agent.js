@@ -25,6 +25,7 @@ const { sendWebhook } = require('../src/webhook');
 const { receiptFromOrder, signReceipt } = require('../src/receipt');
 const { generateSigningKey, configFingerprint } = require('../src/config');
 const { nodesFromEnv } = require('../src/nodes');
+const { loadOrders, saveOrders } = require('../src/ledger');
 
 const env = process.env;
 let NODES;
@@ -46,14 +47,6 @@ const intEnv = (k, d) => { const n = Number(env[k]); return Number.isFinite(n) ?
 // its scan state too; without it a restarted wallet starts at the tip and can't
 // see a payment that arrived during the downtime.
 const ORDERS_FILE = env.XMR_ORDERS_FILE || 'orders.json';
-function loadOrders() {
-    try { return new Map(JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')).map(o => [o.id, o])); }
-    catch { return new Map(); }
-}
-function saveOrders(store) {
-    try { fs.writeFileSync(ORDERS_FILE, JSON.stringify([...store.values()])); }
-    catch (e) { console.error(`[orders] save failed: ${e.message}`); }
-}
 // COALESCED save for routine updates: the poller calls onUpdate once per pending
 // order per tick, so writing the whole ledger each time is O(N) blocking writes
 // per poll. debounce to at most one write per second. (createOrder / onPaid /
@@ -62,7 +55,7 @@ let _saveDirty = false, _saveTimer = null;
 function queueSave(store) {
     _saveDirty = true;
     if (_saveTimer) return;
-    _saveTimer = setTimeout(() => { _saveTimer = null; if (_saveDirty) { _saveDirty = false; saveOrders(store); } }, 1000);
+    _saveTimer = setTimeout(() => { _saveTimer = null; if (_saveDirty) { _saveDirty = false; saveOrders(ORDERS_FILE, store); } }, 1000);
     if (_saveTimer.unref) _saveTimer.unref();
 }
 
@@ -94,7 +87,7 @@ function send(res, code, body) {
     console.log(`scanner up · node ${scanner.node} · view-only · birthday height ${scanner.birthdayHeight}`);
     if (!env.XMR_WALLET_PATH) console.warn('[warn] XMR_WALLET_PATH not set — set it so the wallet keeps its scan state across restarts (orders persist, but a fresh wallet starts at the tip).');
 
-    const store = loadOrders();
+    const store = loadOrders(ORDERS_FILE);
     let idc = 0; for (const id of store.keys()) { const m = /(\d+)$/.exec(id); if (m && +m[1] > idc) idc = +m[1]; }
     console.log(`orders: ${store.size} reloaded from ${ORDERS_FILE}`);
 
@@ -152,7 +145,7 @@ function send(res, code, body) {
             order.webhookNextAt = Date.now() + backoff;
             console.warn(`[webhook] ${orderId} undelivered (attempt ${order.webhookAttempts}, ${(res && (res.status || res.error)) || '?'}) — retry in ${Math.round(backoff / 1000)}s`);
         }
-        saveOrders(store);
+        saveOrders(ORDERS_FILE, store);
     }
 
     // ── SSE push (instant detection) ────────────────────────────────────────
@@ -205,7 +198,14 @@ function send(res, code, body) {
         // long-running agent's memory + ledger stay bounded. 0 = keep forever.
         paidRetentionMs: Math.max(0, (Number(env.XMR_PAID_RETENTION_HOURS) || 0) * 3600000),
         onPaid: async (order) => {
-            saveOrders(store);
+            // Persist the pending webhook with the paid state so a crash during
+            // receipt creation still leaves a notification to retry on restart.
+            const live = store.get(order.id);
+            if (live && env.FULFILL_WEBHOOK_URL) {
+                live.webhookDelivered = false; live.webhookAttempts = 0; live.webhookNextAt = 0;
+            }
+            try { saveOrders(ORDERS_FILE, store); }
+            catch (e) { console.error(`[orders] paid order save failed: ${e.message}`); process.exit(2); }
             pushOrder(order.id);   // tell the buyer "paid" INSTANTLY — before the (slower) receipt mint below
             console.log(`[paid] ${order.id} · ${order.amount} XMR · tx ${order.txids.join(',')}`);
 
@@ -229,16 +229,13 @@ function send(res, code, body) {
                     order.receipt = signed;                 // for the webhook payload (onPaid gets a snapshot)
                     const live = store.get(order.id);        // ALSO persist on the live order so GET /receipt/:id + a reload find it
                     if (live) live.receipt = signed;
-                    saveOrders(store);
+                    try { saveOrders(ORDERS_FILE, store); }
+                    catch (e) { console.error(`[orders] receipt save failed: ${e.message}`); process.exit(2); }
                     console.log(`[receipt] ${order.id} signed${txProofs.length ? ` + ${txProofs.length} tx_proof(s)` : ''}`);
                 } catch (e) { console.error(`[receipt] ${order.id} mint failed: ${e.message}`); }
             }
 
             if (env.FULFILL_WEBHOOK_URL) {
-                // mark pending on the LIVE order (onPaid gets a snapshot) so the flag
-                // persists + the sweep can re-attempt; then try once immediately.
-                const live = store.get(order.id);
-                if (live) { live.webhookDelivered = false; live.webhookAttempts = 0; live.webhookNextAt = 0; }
                 await deliverWebhook(order.id);
             }
         },
@@ -300,11 +297,17 @@ function send(res, code, body) {
                 req.on('end', async () => {
                     let body; try { body = JSON.parse(raw || '{}'); } catch { return send(res, 400, { error: 'bad json' }); }
                     if (!body.amount) return send(res, 400, { error: 'amount is required' });
-                    try {
-                        const order = await agent.createOrder({ id: body.id, amount: String(body.amount), label: body.label });
-                        saveOrders(store);   // persist immediately so a restart right after won't forget it
-                        send(res, 200, { id: order.id, address: order.address, amount: order.amount, status: order.status, birthdayHeight: order.birthdayHeight });
-                    } catch (e) { send(res, 409, { error: e.message }); }
+                    let order;
+                    try { order = await agent.createOrder({ id: body.id, amount: String(body.amount), label: body.label }); }
+                    catch (e) { return send(res, 409, { error: e.message }); }
+                    try { saveOrders(ORDERS_FILE, store); }
+                    catch (e) {
+                        console.error(`[orders] save failed: ${e.message}`);
+                        send(res, 503, { error: 'order ledger unavailable' });
+                        setTimeout(() => process.exit(2), 100);
+                        return;
+                    }
+                    send(res, 200, { id: order.id, address: order.address, amount: order.amount, status: order.status, birthdayHeight: order.birthdayHeight });
                 });
                 return;
             }
@@ -370,7 +373,7 @@ function send(res, code, body) {
         if (_webhookSweep.unref) _webhookSweep.unref();
     }
 
-    const _persist = setInterval(() => saveOrders(store), 30000); if (_persist.unref) _persist.unref();
+    const _persist = setInterval(() => saveOrders(ORDERS_FILE, store), 30000); if (_persist.unref) _persist.unref();
     // persist the WALLET cache too (subaddress indices + scan progress). without
     // this, a restart re-creates subaddresses from index 1 — reusing a still-
     // pending order's address — and rescans from the restore height every time.
@@ -383,7 +386,7 @@ function send(res, code, body) {
     let _down = false;
     const shutdown = () => {
         if (_down) return; _down = true;
-        agent.stop(); saveOrders(store);
+        agent.stop(); saveOrders(ORDERS_FILE, store);
         scanner.close(true).finally(() => process.exit(0));
     };
     process.on('SIGINT', shutdown);
