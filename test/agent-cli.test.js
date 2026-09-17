@@ -2,6 +2,8 @@
 //   node test/agent-cli.test.js
 
 const { applyConfig, hiddenAnswer, npmInstallEnv } = require('../bin/agent.js');
+const { spawnSync } = require('child_process');
+const path = require('path');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`); };
@@ -64,6 +66,11 @@ const installChild = typeof npmInstallEnv === 'function' ? npmInstallEnv(install
 ok('npm install child keeps ordinary process settings', installChild.PATH === '/usr/bin' && installChild.npm_config_cache === '/tmp/cache');
 ok('npm install child receives no payment or node secrets',
     !Object.keys(installChild).some(key => ['XMR_VIEW_KEY', 'XMR_NODES_JSON', 'XMR_NODES', 'XMR_WALLET_PASSWORD', 'FULFILL_WEBHOOK_SECRET', 'AGENT_TOKEN'].includes(key)));
+
+const exposed = spawnSync(process.execPath, [path.join(__dirname, '../examples/scanner-agent.js')], {
+    env: { XMR_NODES: 'http://127.0.0.1:18081', BIND: '0.0.0.0' }, encoding: 'utf8',
+});
+ok('agent rejects public bind without a token', exposed.status === 1 && exposed.stderr.includes('AGENT_TOKEN is required'));
 
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

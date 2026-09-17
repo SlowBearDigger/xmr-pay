@@ -36,7 +36,11 @@ catch (error) {
 }
 const PORT = Number(env.PORT || 8788);
 const BIND = env.BIND || '127.0.0.1';          // holds the view key → localhost by default
-const TOKEN = env.AGENT_TOKEN || '';            // optional bearer auth for POST /order
+const TOKEN = env.AGENT_TOKEN || '';
+if (!TOKEN && !['127.0.0.1', '::1'].includes(BIND)) {
+    console.error('AGENT_TOKEN is required when BIND is not loopback');
+    process.exit(1);
+}
 const intEnv = (k, d) => { const n = Number(env[k]); return Number.isFinite(n) ? n : d; };
 
 // PERSIST the order ledger so a restart never forgets which orders are awaiting
@@ -282,6 +286,7 @@ function send(res, code, body) {
         const url = req.url.split('?')[0];
         try {
             if (req.method === 'GET' && url === '/healthz') {
+                if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
                 // count paid orders whose fulfillment webhook is still undelivered —
                 // a non-zero value means a merchant endpoint is down / mis-set, NOT a
                 // lost payment (the funds are on-chain; the order is paid).
@@ -311,14 +316,12 @@ function send(res, code, body) {
                 });
                 return;
             }
-            // SSE stream: push status changes the instant the poller folds them, so
-            // the buyer's checkout updates in seconds (BTCPay's socket trick, done
-            // simply). EventSource can't set headers → accept the token via ?token=
-            // too. matched BEFORE the plain /order/:id route.
+            // SSE stream: push status changes the instant the poller folds them.
+            // A browser needs a restricted store proxy that adds the bearer token.
+            // Matched before the plain /order/:id route.
             const sm = url.match(/^\/order\/([^/]+)\/stream$/);
             if (req.method === 'GET' && sm) {
-                const qtoken = new URL(req.url, 'http://x').searchParams.get('token');
-                if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}` && qtoken !== TOKEN) return send(res, 401, { error: 'unauthorized' });
+                if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return send(res, 401, { error: 'unauthorized' });
                 const id = decodeURIComponent(sm[1]);
                 const r0 = agent.get(id);
                 if (!r0) return send(res, 404, { error: 'unknown order' });

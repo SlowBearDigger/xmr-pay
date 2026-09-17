@@ -18,7 +18,9 @@ authoritative integer is piconero (1 XMR = 1e12 piconero).
 ## The agent API
 
 Base URL is whatever you bind it to (default `http://127.0.0.1:8788`). If you set
-`AGENT_TOKEN`, send `Authorization: Bearer <token>` on `/order*` and `/receipt*`.
+`AGENT_TOKEN`, send `Authorization: Bearer <token>` on `/order*`, `/receipt*`, and `/healthz`.
+The agent refuses a non-loopback `BIND` when the token is unset.
+Set the token when a reverse proxy exposes the agent, even if it binds to loopback.
 
 ### `POST /order`
 Create an order and get a fresh per-order subaddress to show the buyer.
@@ -55,8 +57,10 @@ Response `200`:
 A push channel — each event is the same JSON snapshot as `GET /order/:id`, emitted the
 instant the poller folds a change (the buyer's page updates in seconds, no polling lag).
 `Content-Type: text/event-stream`; the server sends an initial snapshot on connect and a
-`: ping` heartbeat. Token (if set) may be passed as `?token=<token>` (EventSource can't set
-headers). The plain poll is a fine fallback if a proxy buffers SSE.
+`: ping` heartbeat. If `AGENT_TOKEN` is set, send it in the `Authorization` header.
+Browser `EventSource` cannot set that header, so use a restricted store proxy that adds
+it server-side. Never put the agent token in a browser URL. The plain poll is a fine
+fallback if a proxy buffers SSE.
 
 ### `GET /receipt/:id`
 The signed, self-contained receipt for a paid order (download/verify offline; also

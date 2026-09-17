@@ -122,8 +122,10 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order|/receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
 | `POLL_MS` | | `15000` | how often the poller re-checks pending orders |
 | `FULFILL_WEBHOOK_URL` / `_SECRET` | | — | where + how to sign the `order.paid` webhook |
-| `AGENT_TOKEN` | | — | optional `Bearer` token required on `POST /order` |
-| `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost — it holds your view key |
+| `AGENT_TOKEN` | | — | `Bearer` token for order, receipt, and health endpoints; required when `BIND` is not loopback |
+| `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost; a non-loopback bind requires `AGENT_TOKEN` |
+
+Set `AGENT_TOKEN` whenever a reverse proxy exposes any agent endpoint, even if the agent itself binds to `127.0.0.1`. Expose only the routes buyers need; never proxy the entire agent API.
 | `XMR_SUBADDRESS_POOL` | | `8` | how many fresh subaddresses to pre-derive so `POST /order` never blocks on the wallet |
 | `XMR_SYNC_TIMEOUT_MS` | | `120000` | per-sync and protected-node RPC deadline; on a stall the agent fails over to the next node |
 | `XMR_SYNC_GAP` | | `2` | lookahead gap when scanning subaddresses |

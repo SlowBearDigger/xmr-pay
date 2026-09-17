@@ -51,7 +51,7 @@ https://shop.example/checkout.html#address=4YOUR_ADDRESS&amount=0.05&label=Order
   `verify-url` so the buyer can prove a payment, or `status-url` if you run the WooCommerce
   plugin / your own agent. The countdown is advisory; the chain is the source of truth, so a
   late top-up is never lost.
-- **Tier 1 (opt-in, your box):** point `stream-url` at your agent's SSE endpoint for live
+- **Tier 1 (opt-in, your box):** point `stream-url` at a restricted store proxy for live
   push instead of polling. Still your server — never a third party.
 
 The countdown shows "Rate locked · MM:SS". When it elapses the address stays payable (it
