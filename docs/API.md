@@ -17,10 +17,10 @@ authoritative integer is piconero (1 XMR = 1e12 piconero).
 
 ## The agent API
 
-Base URL is whatever you bind it to (default `http://127.0.0.1:8788`). If you set
-`AGENT_TOKEN`, send `Authorization: Bearer <token>` on `/order*`, `/receipt*`, and `/healthz`.
-The agent refuses a non-loopback `BIND` when the token is unset.
-Set the token when a reverse proxy exposes the agent, even if it binds to loopback.
+Base URL is whatever you bind it to (default `http://127.0.0.1:8788`). Set
+`AGENT_TOKEN` and send `Authorization: Bearer <token>` on `/order*`, `/receipt*`, and `/healthz`.
+The agent refuses to start without a token, including on loopback.
+Keep this token on the merchant backend; expose only buyer-specific proxy routes.
 
 ### `POST /order`
 Create an order and get a fresh per-order subaddress to show the buyer.
@@ -32,7 +32,7 @@ Response `200`:
 ```json
 { "id": "order-123", "address": "8…", "amount": "0.05", "status": "pending", "birthdayHeight": 3211904 }
 ```
-Errors: `400` (bad/missing amount), `401` (bad token), `409` (id already exists).
+Errors: `400` (malformed JSON or object), `401` (bad token), `409` (invalid or duplicate order), `413` (body too large), `415` (JSON content type required), `503` (persistence unavailable).
 
 ### `GET /order/:id`
 Poll an order's status (reads cached state — the background poller keeps it fresh; never
@@ -57,7 +57,7 @@ Response `200`:
 A push channel — each event is the same JSON snapshot as `GET /order/:id`, emitted the
 instant the poller folds a change (the buyer's page updates in seconds, no polling lag).
 `Content-Type: text/event-stream`; the server sends an initial snapshot on connect and a
-`: ping` heartbeat. If `AGENT_TOKEN` is set, send it in the `Authorization` header.
+`: ping` heartbeat. Send `AGENT_TOKEN` in the `Authorization` header.
 Browser `EventSource` cannot set that header, so use a restricted store proxy that adds
 it server-side. Never put the agent token in a browser URL. The plain poll is a fine
 fallback if a proxy buffers SSE.

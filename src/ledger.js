@@ -1,4 +1,6 @@
+// Persist payment orders with atomic replacement.
 const fs = require('fs');
+const { randomUUID } = require('node:crypto');
 
 function loadOrders(file) {
     try {
@@ -14,9 +16,13 @@ function loadOrders(file) {
 }
 
 function saveOrders(file, store) {
-    const temporary = `${file}.${process.pid}.tmp`;
+    const temporary = `${file}.${randomUUID()}.tmp`;
     try {
-        fs.writeFileSync(temporary, JSON.stringify([...store.values()]), { mode: 0o600 });
+        const fd = fs.openSync(temporary, 'wx', 0o600);
+        try {
+            fs.writeFileSync(fd, JSON.stringify([...store.values()]));
+            fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
         fs.renameSync(temporary, file);
     } catch (error) {
         try { fs.unlinkSync(temporary); } catch {}

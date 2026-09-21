@@ -1,28 +1,18 @@
+// Summarize recorded payments and refunds.
 'use strict';
-/*
- * Order -> CSV: a shared reporting column schema, so any CSV export (the WooCommerce plugin's
- * admin export today, an agent endpoint if one is added later) can speak the same columns. Pure,
- * zero-dependency. The plugin adds a few WC-specific columns (wc_status, mode, refund_status) on
- * top of these CORE columns. NOTE: the agent ships no /orders.csv route yet — this is the helper.
- */
 
-// the core columns every transport can produce from an order record.
 const CORE_COLUMNS = ['order', 'date', 'state', 'owed_xmr', 'received_xmr', 'overpaid_xmr', 'confirmations', 'txids'];
 
-// neutralise spreadsheet formula injection: a leading =,+,-,@,tab,CR becomes text. Mirror of
-// XmrPay_Report::csv_safe in the plugin.
 function csvSafe(v) {
     const s = v == null ? '' : String(v);
     return (s.length && '=+-@\t\r'.indexOf(s[0]) !== -1) ? "'" + s : s;
 }
 
-// RFC-4180-ish field: wrap in quotes + double internal quotes when the value needs it.
 function csvField(v) {
     const s = csvSafe(v);
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-// one agent order -> a row object keyed by CORE_COLUMNS.
 function orderRow(o) {
     o = o || {};
     return {
@@ -37,7 +27,6 @@ function orderRow(o) {
     };
 }
 
-// orders -> a CSV string (header + one row per order), using CORE_COLUMNS.
 function ordersToCsv(orders) {
     const rows = [CORE_COLUMNS.join(',')];
     for (const o of (orders || [])) {

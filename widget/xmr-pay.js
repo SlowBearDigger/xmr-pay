@@ -2299,11 +2299,7 @@ var qrcode = function() {
     return qrcode;
 }));
 
-// ── <xmr-pay> web component ─────────────────────────────────────────────────
-// expects `qrcode` (vendored above) in scope. no other dependencies. the ONLY network calls
-// are to the merchant's own endpoints when configured: verify-url (proof submit), status-url /
-// stream-url (watch poll + SSE), and receipt-url. with none set, the widget makes no requests.
-
+// Render Monero checkout, payment status and receipt links.
 var XP_STR = {
     en: {
         sendExactly: 'Send exactly', anyAmount: 'Send any amount', awaiting: 'Awaiting payment', scanToSend: 'Scan or tap to send',
@@ -2381,10 +2377,6 @@ var XP_STR = {
     },
 };
 
-// two skins, one component. default = "clean" (universal, rounded, system
-// sans). skin="brutal" flips to the goxmr look (mono, square, hard offset
-// shadow). every color/shape is a css custom property so any brand can retheme
-// without forking.
 var XP_CSS = [
     ':host{--xp-accent:#FF6600;--xp-qr:#F26822;--xp-bg:#1b1b1f;--xp-fg:#f7f7f8;--xp-muted:#9b9ba4;',
     '--xp-border:#33333b;--xp-input:#26262d;--xp-green:#22c55e;--xp-yellow:#eab308;--xp-red:#f87171;',
@@ -2482,11 +2474,6 @@ function xpEsc(s) {
     });
 }
 
-// canonical XMR decimal for the monero: URI's tx_amount — trims trailing zeros
-// and surrounding space so every wallet (Feather, GUI, CLI, Cake, Monerujo,
-// Stack…) prefills the same clean amount. matches src/core.js picoToXmrString,
-// the form round-trip-tested against the official wallet2 parser. odd inputs are
-// left untouched (the amount is validated server-side regardless).
 function xpNormAmount(a) {
     a = String(a == null ? '' : a).trim();
     if (!/^\d+(\.\d{1,12})?$/.test(a)) return a;
@@ -2494,8 +2481,6 @@ function xpNormAmount(a) {
     return a.replace(/0+$/, '').replace(/\.$/, '');
 }
 
-// signed-config verification, browser side. mirrors src/config.js exactly so a
-// config signed in node verifies here. Ed25519 via WebCrypto (modern browsers).
 function xpCanonical(v) {
     if (v === null || typeof v !== 'object') return JSON.stringify(v);
     if (Array.isArray(v)) return '[' + v.map(xpCanonical).join(',') + ']';
@@ -2504,8 +2489,7 @@ function xpCanonical(v) {
 function xpB64ToBytes(b64) { var s = atob(b64); var a = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
 function xpPemToDer(pem) { return xpB64ToBytes(pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '')); }
 async function xpFingerprint(der) {
-    // 12 bytes / 96 bits — must match configFingerprint() in src/config.js, or a
-    // pinned fingerprint never matches what the widget computes.
+
     var h = new Uint8Array(await crypto.subtle.digest('SHA-256', der));
     var hex = ''; for (var i = 0; i < 12; i++) hex += h[i].toString(16).padStart(2, '0');
     return hex.match(/.{4}/g).join('-');
@@ -2530,9 +2514,6 @@ class XmrPay extends HTMLElement {
     _closeStream() { if (this._es) { try { this._es.close(); } catch (e) {} this._es = null; } this._streaming = false; }
     attributeChangedCallback() { if (this.isConnected) this._resolve().then(() => this._render()); }
 
-    // work out the effective address/amount and the signing state before render.
-    // a `config` attribute (base64 signed envelope) overrides inline attrs and,
-    // if its signature is bad or fails a pin, suppresses the pay UI entirely.
     async _resolve() {
         var cfg = this.getAttribute('config');
         if (!cfg) {
@@ -2544,9 +2525,7 @@ class XmrPay extends HTMLElement {
         try {
             var env = JSON.parse(atob(cfg));
             var v = await xpVerifyConfig(env);
-            // pinning: a `pubkey` is the signer's FULL key — compare its DER bytes
-            // (formatting-agnostic), not as if it were a fingerprint. a `fingerprint`
-            // is the short hex id. either one, when set, must match the signer.
+
             var pinnedPub = (this.getAttribute('pubkey') || '').trim();
             var pinnedFp = (this.getAttribute('fingerprint') || '').trim();
             var pinned = true;
@@ -2595,8 +2574,6 @@ class XmrPay extends HTMLElement {
         var sign = this._sign || { state: 'unsigned' };
         var root = this.shadowRoot || this.attachShadow({ mode: 'open' });
 
-        // a config that claims to be signed but doesn't verify (or fails a pin)
-        // never shows a payable address — it's the loudest failure mode we have.
         if (sign.state === 'bad') {
             root.innerHTML = '<style>' + XP_CSS + '</style>' +
                 '<div class="card"><div class="hd"><div class="st" style="color:var(--xp-red)">⚠ ' + t.badTitle + '</div></div>' +
@@ -2627,8 +2604,7 @@ class XmrPay extends HTMLElement {
             '<button class="addr" type="button" aria-label="' + t.addrLabel + '"><b>' + fpHead + '</b>' + fpMid + '<b>' + fpTail + '</b></button>' +
             '<a class="wallet" href="' + xpEsc(this._uri()) + '">' + t.openWallet + '</a>' +
             '</div>' +
-            // watch mode: the agent is already scanning (view key), so the buyer
-            // just taps "detect" — no txid/proof to paste. auto-polls too.
+
             (statusUrl ?
                 '<div class="sec watch">' +
                 '<div class="xp-steps" aria-hidden="true">' +
@@ -2700,10 +2676,6 @@ class XmrPay extends HTMLElement {
         var verifyBtn = root.querySelector('.verify');
         if (verifyBtn) verifyBtn.addEventListener('click', function () { self._verify(root, verifyUrl, t); });
 
-        // watch mode: wire the "detect" button, open a push stream if offered, and
-        // auto-poll the status URL. the stream (SSE) updates the buyer in seconds;
-        // the poll stays as a backup so a buffering proxy can't make a payment look
-        // lost — it just slows to a heartbeat cadence when a stream is live.
         var statusUrl = (this.getAttribute('status-url') || '').trim();
         var streamUrl = (this.getAttribute('stream-url') || '').trim();
         var detectBtn = root.querySelector('.detect');
@@ -2716,11 +2688,7 @@ class XmrPay extends HTMLElement {
                 this._watchStart = Date.now();
                 clearTimeout(this._watchT);
                 this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, 1500);
-                // poll the instant the buyer returns to the tab (e.g. back from their wallet
-                // app), throttled so focus/blur churn can't hammer the merchant's endpoint.
-                // _wire runs on every _render (any observed-attribute change), so drop a prior
-                // handler before registering a new one — otherwise the old closure leaks, still
-                // firing and now unremovable (disconnectedCallback only knows the latest).
+
                 if (this._onVis) { document.removeEventListener('visibilitychange', this._onVis); window.removeEventListener('focus', this._onVis); }
                 this._onVis = function () {
                     if (self._paidDone || document.visibilityState !== 'visible') return;
@@ -2734,9 +2702,6 @@ class XmrPay extends HTMLElement {
             }
         }
 
-        // smart paste: Feather's "formatted proof" (and similar) is one text
-        // block with txid + address + signature. accept the whole thing in
-        // either box and sort the pieces out.
         var txidIn = root.querySelector('.txid'), proofIn = root.querySelector('.proof');
         var split = function (el) {
             var v = el.value;
@@ -2751,8 +2716,6 @@ class XmrPay extends HTMLElement {
             [txidIn, proofIn].forEach(function (el) { el.addEventListener('input', function () { split(el); }); });
         }
 
-        // mobile-friendly: read the clipboard and let smart-split sort it. needs
-        // a user gesture + HTTPS; falls back to a hint if the browser refuses.
         var pasteBtn = root.querySelector('.paste');
         if (pasteBtn && txidIn && proofIn) {
             pasteBtn.addEventListener('click', function () {
@@ -2781,8 +2744,7 @@ class XmrPay extends HTMLElement {
         var btn = root.querySelector('.verify');
         if (!txid) { root.querySelector('.txid').focus(); return; }
         if (!proof) { root.querySelector('.proof').focus(); return; }
-        // catch the common paste mistakes BEFORE a server round-trip, with a
-        // specific message so the buyer can fix it on the spot.
+
         if (!/^[0-9a-f]{64}$/i.test(txid)) { this._showRes(root, t.badTxid, 'bad'); root.querySelector('.txid').focus(); return; }
         if (!(/^[0-9a-f]{64}$/i.test(proof) || /^(Out|In)Proof/i.test(proof))) { this._showRes(root, t.badProof, 'bad'); root.querySelector('.proof').focus(); return; }
 
@@ -2812,9 +2774,7 @@ class XmrPay extends HTMLElement {
         if (status === 'underpaid') {
             var recv = out.receivedXmr != null ? out.receivedXmr : '?';
             if (out.shortfallXmr != null) {
-                // the server computed the missing amount in piconero (exact). show
-                // it AND a QR for EXACTLY the difference so the buyer can top up —
-                // no mental math, no chance to send the wrong amount.
+
                 msg = t.topupMsg.replace('{r}', recv).replace('{s}', out.shortfallXmr);
                 if (topup) {
                     var tUri = 'monero:' + (this._addr || '') + '?tx_amount=' + encodeURIComponent(out.shortfallXmr);
@@ -2827,14 +2787,12 @@ class XmrPay extends HTMLElement {
                     topup.className = 'topup';
                 }
             } else {
-                // older server without shortfallXmr — fall back to expected amount.
+
                 var exp = out.expectedXmr != null ? out.expectedXmr : (this.getAttribute('amount') || '—');
                 msg = t.underpaid.replace('{r}', recv).replace('{e}', exp);
             }
         }
-        // proof mode LIVE progress: a mempool/unconfirmed payment WILL confirm —
-        // show the real confirmation count and re-check on a timer until it's paid,
-        // so the buyer watches it climb instead of being told to "try again later".
+
         if (status === 'unconfirmed' && out && out.confirmations != null) {
             msg = t.confirming.replace('{c}', out.confirmations);
         }
@@ -2847,11 +2805,6 @@ class XmrPay extends HTMLElement {
         }
     }
 
-    // push stream: connect to the agent's SSE channel (stream-url). each event is a
-    // full status snapshot — same shape as the poll — so detection lands in seconds
-    // with no polling lag. the browser auto-reconnects on a dropped connection; the
-    // backup poll keeps running (slowed) so a proxy that buffers SSE can't strand a
-    // payment. closed once paid (or on disconnect).
     _stream(root, streamUrl, t) {
         var self = this;
         var es;
@@ -2862,16 +2815,12 @@ class XmrPay extends HTMLElement {
             var out; try { out = JSON.parse(ev.data); } catch (e) { return; }
             self._applyWatch(root, out, t);
         };
-        es.onerror = function () { /* keep the poll backup; EventSource auto-reconnects */ };
+        es.onerror = function () {   };
     }
 
-    // watch mode poll: GET the status URL (the agent /order/:id or a proxy) and
-    // react. no proof to paste — the agent is already scanning the chain. keeps
-    // polling on mempool/unconfirmed; on paid → _success (→ receipt). `manual`
-    // is a buyer-triggered "detect" click (shows button feedback).
     async _watch(root, statusUrl, t, manual) {
         if (this._paidDone || !this.isConnected) return;
-        this._lastWatch = Date.now();   // for the visibility-poll throttle
+        this._lastWatch = Date.now();
         var self = this;
         var btn = root.querySelector('.detect');
         if (manual && btn) { btn.disabled = true; btn.textContent = t.detecting; }
@@ -2883,8 +2832,7 @@ class XmrPay extends HTMLElement {
         if (manual && btn) { btn.disabled = false; btn.textContent = t.detectBtn; }
         if (this._paidDone) return;
         this._applyWatch(root, out, t);
-        // backup cadence: brisk early + while a payment is in flight; ease off on an idle,
-        // long-abandoned tab; slow heartbeat when a push stream carries the live updates.
+
         clearTimeout(this._watchT);
         var seen = out && (out.status === 'mempool' || out.status === 'unconfirmed' || out.status === 'partial' || out.status === 'underpaid');
         var delay;
@@ -2897,7 +2845,6 @@ class XmrPay extends HTMLElement {
         this._watchT = setTimeout(function () { self._watch(root, statusUrl, t, false); }, delay);
     }
 
-    // fold one status snapshot (from a poll OR a stream event) into the UI.
     _applyWatch(root, out, t) {
         if (this._paidDone) return;
         if (out && out.paid) {
@@ -2910,8 +2857,7 @@ class XmrPay extends HTMLElement {
         if (wst) {
             var status = out && out.status;
             var msg;
-            // lead with "payment received" the instant a tx is seen (mempool/unconfirmed)
-            // so the buyer feels done and stops worrying — it's only confirmations left.
+
             if (status === 'mempool') msg = t.mempool;
             else if (status === 'unconfirmed' && out.confirmations != null) msg = t.confirming.replace('{c}', out.confirmations);
             else if ((status === 'partial' || status === 'underpaid') && out.shortfallXmr != null) msg = t.topupMsg.replace('{r}', out.receivedXmr != null ? out.receivedXmr : '?').replace('{s}', out.shortfallXmr);
@@ -2923,8 +2869,6 @@ class XmrPay extends HTMLElement {
         this._setSteps(root, seen ? 'seen' : 'await');
     }
 
-    // drive the 3-step progress indicator (await -> seen -> done). Visual only (aria-hidden):
-    // the .wst line carries the announced status, so the stepper never double-speaks to a reader.
     _setSteps(root, stage) {
         var a = root.querySelector('.st-await'), b = root.querySelector('.st-seen'), c = root.querySelector('.st-done');
         if (!a) return;
@@ -2935,8 +2879,7 @@ class XmrPay extends HTMLElement {
     }
 
     _success(root, out, t) {
-        // a proof-verify result and a watch/stream event can both report paid; render once.
-        // (can't gate on _paidDone — _applyWatch sets it before calling here.)
+
         if (this._succeeded) return;
         this._succeeded = true;
         this._paidDone = true;
@@ -2947,49 +2890,39 @@ class XmrPay extends HTMLElement {
         var body = root.querySelector('.body');
         if (!body) return;
         body.innerHTML = '<div class="ok"><div class="ring">✓</div><div class="t">' + t.paidTitle + '</div>' +
-            '<div class="c">' + (out.confirmations != null ? out.confirmations + ' ' + t.confs : '') + '</div>' +
+            '<div class="c">' + (out.confirmations != null ? xpEsc(String(out.confirmations)) + ' ' + t.confs : '') + '</div>' +
             (out.overpaid ? '<div class="over">' + t.overpaidMsg.replace('{x}', xpEsc(String(out.overpaidXmr != null ? out.overpaidXmr : ''))) + '</div>' : '') +
             '<div class="rcpt hidden"></div></div>';
-        // the cryptographic receipt — engine-level, so ANY embedder gets it (not
-        // just WooCommerce). on paid, fetch the merchant-signed receipt and show a
-        // download + a one-click link to the offline verifier.
+
         var hasReceipt = !!( this.getAttribute('receipt-url') || '' ).trim();
         if (hasReceipt) this._receipt(root, t);
-        // UX signal ONLY — this runs in the buyer's browser, so a buyer can fire
-        // this event (or fake this whole success state) from the console. NEVER
-        // release goods on it. Fulfill on YOUR server's verifyPayment + order
-        // record. (Same rule as Stripe: the client is not the authority.)
+
         this.dispatchEvent(new CustomEvent('xmr-pay:paid', { detail: out, bubbles: true, composed: true }));
-        // auto-redirect is opt-in (redirect-url). but a downloadable receipt must
-        // not be yanked away — when one is shown, keep the buyer on the page.
-        // SANITIZE: only an absolute http(s) URL or a single-slash same-origin path
-        // is followed. NEVER a javascript:/data:/protocol-relative value — location
-        // .assign('javascript:…') EXECUTES it (XSS). the embedder sets this attribute,
-        // but a value from untrusted input must not become script execution.
+
         var redirect = this.getAttribute('redirect-url') || '';
         var safeRedirect = (/^https?:\/\//i.test(redirect) || /^\/[^/]/.test(redirect)) ? redirect : '';
         if (safeRedirect && !hasReceipt) setTimeout(function () { location.assign(safeRedirect); }, 2500);
     }
 
-    // fetch the signed receipt (from receipt-url, the agent /receipt/:id or a
-    // store proxy) and render the download + verifier links. verify-page points
-    // at the offline verifier (default 'verify-receipt.html'); the receipt rides
-    // in its URL #fragment so the verifier needs no backend.
     async _receipt(root, t) {
         var url  = ( this.getAttribute('receipt-url') || '' ).trim();
         var page = ( this.getAttribute('verify-page') || 'verify-receipt.html' ).trim();
+        try {
+            page = new URL(page, document.baseURI);
+            if (!/^https?:$/.test(page.protocol)) return;
+            page.hash = '';
+            page = page.href;
+        } catch (e) { return; }
         var box  = root.querySelector('.rcpt');
         if (!url || !box) return;
-        // the agent may still be minting the receipt (the on-chain tx_proof can
-        // take a moment) → it answers 409 until ready. retry a few times before
-        // giving up, so a freshly-paid order still shows its receipt.
+
         var env = null;
         for (var i = 0; i < 6 && !env; i++) {
             try {
                 var r = await fetch(url, { headers: { Accept: 'application/json' } });
                 if (r.ok) { env = await r.json(); break; }
-                if (r.status !== 409) return;   // a real error (404/401) — stop
-            } catch (e) { /* transient — retry */ }
+                if (r.status !== 409) return;
+            } catch (e) {   }
             await new Promise(function (res) { setTimeout(res, 2000); });
         }
         if (!env || !env.sig || !env.receipt) return;

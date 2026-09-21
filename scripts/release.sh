@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# build the release artifacts and sign them.
-#   1. rebuild the widget reproducibly
-#   2. SHA256SUMS over the files people actually download
-#   3. sign SHA256SUMS with minisign (and GPG if GPG_SIGN is set)
-#
-# one signature covers everything: verify SHA256SUMS, then the hashes cover the
-# files. requires minisign (brew install minisign); GPG optional.
+# Build release checksums and apply configured signatures.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

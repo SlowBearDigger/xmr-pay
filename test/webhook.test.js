@@ -10,6 +10,7 @@ const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`
 let hits = 0;
 let seen = null;
 const server = http.createServer((req, res) => {
+    if (req.url === '/redirect') { res.writeHead(307, { Location: '/hook' }); res.end(); return; }
     hits++;
     let raw = '';
     req.on('data', c => raw += c);
@@ -40,6 +41,10 @@ const server = http.createServer((req, res) => {
     ok('event_ts stamped, recent, and signed', typeof ts === 'number' && Date.now() - ts < 60000);
     const caller = await sendWebhook(url, { event: 'x', event_ts: 123 }, { secret: 'whsec_test', attempts: 1 });
     ok('caller-supplied event_ts is preserved', JSON.parse(seen.body).event_ts === 123);
+
+    const previousHits = hits;
+    const redirected = await sendWebhook(url.replace('/hook', '/redirect'), payload, { secret: 'whsec_test', attempts: 1 });
+    ok('signed callbacks never follow redirects', !redirected.delivered && hits === previousHits);
 
     // unreachable target reports failure instead of throwing
     const dead = await sendWebhook('http://127.0.0.1:1/hook', payload, { attempts: 1, timeoutMs: 1500 });

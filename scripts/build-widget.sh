@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# reassemble widget/xmr-pay.js from source + the vendored qrcode-generator.
-# deterministic: no timestamps, no minifier, plain concatenation. anyone who
-# runs `npm run build` gets a byte-identical file, so the published SHA256SUMS
-# can be reproduced rather than trusted. qrcode-generator is vendored in-repo
-# (src/vendor) so the build needs no npm dependency at all.
+# Build the widget and hosted checkout from canonical sources.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,7 +21,5 @@ OUT=widget/xmr-pay.js
 node --check "$OUT"
 echo "built $OUT ($(wc -c < "$OUT" | tr -d ' ') bytes, qrcode-generator@${VER})"
 
-# ship the same built widget alongside the portable hosted checkout page, so hosted/ is a
-# self-contained zero-server drop-in (Tier 0). git-ignored; published via npm files[].
 cp "$OUT" hosted/xmr-pay.js
 echo "copied widget -> hosted/xmr-pay.js"

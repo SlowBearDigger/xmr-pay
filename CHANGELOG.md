@@ -4,6 +4,15 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Apply security overrides when the CLI installs the optional Monero engine.
+- Require authentication on every agent bind, reject malformed order requests, and generate unpredictable order IDs.
+- Persist wallet allocation before returning an order; preserve pending funds and undelivered payment notifications.
+- Reject malformed unlock times and unknown wallet capabilities; propagate wallet save failures.
+- Escape widget confirmation output, restrict receipt verifier URLs, and prevent webhook redirects.
+- Bound the demo's static file paths and simplify source comments without changing executable logic.
+
 ## [1.1.0] - 2026-06-21
 
 ### Added

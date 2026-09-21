@@ -1,3 +1,4 @@
+// Provide bounded, authenticated access to read-only daemon endpoints.
 'use strict';
 
 const http = require('node:http');
@@ -12,8 +13,6 @@ class NodeTransportError extends Error {
     }
 }
 
-// RFC 7616 algorithm tokens and the Node hash that computes each. Anything else fails
-// closed as node-auth-algorithm rather than guessing.
 const DIGEST_HASHES = { 'MD5': 'md5', 'MD5-SESS': 'md5', 'SHA-256': 'sha256', 'SHA-256-SESS': 'sha256' };
 
 function challengeParameters(header, wantedScheme) {
@@ -104,8 +103,7 @@ function digestAuthorization(node, challenge, method, requestUri) {
     ];
     if (challenge.opaque) fields.push(`opaque="${quote(challenge.opaque)}"`);
     if (qops.length) fields.push('qop=auth', `nc=${nc}`);
-    // a -sess HA1 folds the cnonce in, so the header must carry it even without qop;
-    // otherwise the server cannot recompute the response at all.
+
     if (qops.length || session) fields.push(`cnonce="${cnonce}"`);
     return 'Digest ' + fields.join(', ');
 }
@@ -242,9 +240,7 @@ async function requestNode(node, { method = 'GET', path = '/', headers = {}, bod
         if (challengeResponse.status >= 300 && challengeResponse.status < 400) throw new NodeTransportError('node-redirect');
         if (challengeResponse.status !== 401) return validateResponse(challengeResponse);
         let challenge = parseDigestChallenge(challengeResponse.headers['www-authenticate']);
-        // stale=true on a 401 means the credentials were fine and only the nonce expired
-        // between challenge and reply (RFC 7616 section 3.3): retry once with the fresh nonce,
-        // never more, so a server that always claims stale cannot loop us.
+
         for (let attempt = 0; ; attempt++) {
             const authHeaders = { ...baseHeaders, authorization: digestAuthorization(node, challenge, upperMethod, upstream.pathname + upstream.search) };
             const response = await requestOnce(upstream, { method: upperMethod, headers: authHeaders, body: payload, timeoutMs: remaining(), maxResponseBytes, signal });

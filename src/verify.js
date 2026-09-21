@@ -1,39 +1,15 @@
-// stateless Monero payment verification.
-//
-// the buyer hands the merchant (txid + proof). this module re-verifies that
-// proof against Monero nodes the MERCHANT chooses — it never trusts the buyer,
-// the merchant's word, or any third party. a lie cannot pass: the proof either
-// checks out on-chain or it doesn't.
-//
-// accepted proof material (either, auto-detected):
-//   - tx secret key   (64 hex — wallet: "show transaction key")
-//   - tx proof        (OutProofV2.../InProofV2... — wallet: "prove payment")
-//
-// no state lives here. anti-replay belongs to the caller's own order storage:
-// pass `alreadyUsed(txid)` and reuse is rejected. when each order carries a
-// unique amount (amount-nonce, see xmr-pay/core) the proof additionally only
-// fits its own order.
-//
-// design notes:
-//   - all amounts compared in piconero (BigInt) — float never decides money.
-//   - node quorum: set quorum >= 2 to require independent nodes to agree before
-//     trusting a result. answers "why should I trust your node?" — you don't.
-//   - monero-ts (WASM) is a peer dependency; verifier wallets are random keys,
-//     hold nothing, and are cached per node for warm serverless invocations.
-
+// Verify on-chain payment evidence and exact amounts.
 let monerojs = null;
 function lazyMonero() {
     if (!monerojs) monerojs = require('monero-ts');
     return monerojs;
 }
 
-// loud-but-once guardrail for footguns. a payments lib should make a dangerous
-// opt-out visible in the logs, not silent.
 const _warned = new Set();
 function warnOnce(msg) {
     if (_warned.has(msg)) return;
     _warned.add(msg);
-    try { console.warn('[xmr-pay] ' + msg); } catch { /* no console */ }
+    try { console.warn('[xmr-pay] ' + msg); } catch {   }
 }
 
 const ADDR_FIRST_CHAR = {
@@ -50,21 +26,9 @@ function isValidTxid(t) {
     return typeof t === 'string' && /^[0-9a-f]{64}$/i.test(t);
 }
 
-// exact decimal → piconero. strings are taken verbatim so the 12th decimal
-// never falls to float error (amount-nonce lives in those last digits). numbers
-// are accepted too, but a small one (0.00000001) stringifies to "1e-8" which the
-// validator would reject — so convert a number to a plain 12-decimal string
-// first (this caps a number at piconero precision; pass a string for full nonce
-// fidelity).
-// Monero amounts are uint64 piconero — MONEY_SUPPLY (cryptonote_config.h) is
-// ((uint64_t)-1). a value above this ceiling cannot exist on-chain, so we reject
-// it just as monerod's parse_amount does (tests/unit_tests/parse_amount.cpp:
-// "184467440738" and "18446744073709551616" → invalid).
 const MAX_PICO = 18446744073709551615n;
 function xmrToPico(x) {
-    // reject non-scalar inputs up front — an array like [5] would otherwise coerce
-    // via String() to "5" and be silently accepted (type-confusion). only a number,
-    // string, or bigint is a meaningful amount.
+
     if (typeof x !== 'number' && typeof x !== 'string' && typeof x !== 'bigint') {
         throw new Error(`invalid XMR amount type: ${x === null ? 'null' : Array.isArray(x) ? 'array' : typeof x}`);
     }
@@ -81,53 +45,35 @@ function picoToXmr(p) {
     return Number(p) / 1e12;
 }
 
-// piconero BigInt → EXACT canonical XMR decimal string (trailing zeros trimmed).
-// unlike picoToXmr (a float, fine for display) this never loses a piconero — use
-// it for any amount that must be exact, e.g. a top-up shortfall or a nonce.
 function picoToXmrString(pico) {
-    // handle the sign separately — padStart on "-1" would wedge the minus INSIDE
-    // the digits ("00000000000-1") and produce a garbage amount string.
+
     const neg = pico < 0n;
     const s = (neg ? -pico : pico).toString().padStart(13, '0');
     const i = s.slice(0, -12);
     let f = s.slice(-12);
-    let fend = f.length; while (fend > 0 && f.charCodeAt(fend - 1) === 48) fend--;  // trim trailing zeros, no regex (ReDoS-free)
+    let fend = f.length; while (fend > 0 && f.charCodeAt(fend - 1) === 48) fend--;
     f = f.slice(0, fend);
     return (neg ? '-' : '') + (f ? `${i}.${f}` : i);
 }
 
-// parse an atomic-unit amount (piconero) coming from wallet-rpc or a daemon into
-// a BigInt. these arrive as JSON numbers (integers); a non-integer or otherwise
-// unparseable value is malformed input from an untrusted or buggy node — throw a
-// descriptive error so the caller can fail CLOSED (reject) instead of leaking a
-// raw BigInt exception. a negative integer is allowed through (it resolves to
-// no-funds downstream); garbage is not. (a JS number above 2^53 has already lost
-// precision before we see it — the documented whale caveat, unchanged.)
 function atomicToPico(v) {
     if (v === undefined || v === null) return 0n;
     if (typeof v === 'bigint') return v;
     if (typeof v === 'number') {
         if (!Number.isInteger(v)) throw new Error(`non-integer atomic amount: ${v}`);
-        // a JS number past 2^53 has ALREADY lost integer precision in transit
-        // (JSON), so BigInt(v) would mint a confidently-wrong amount. fail CLOSED:
-        // large atomic amounts must arrive as a string or BigInt (monero-ts hands
-        // us BigInt; a wallet-rpc client should read amounts as strings).
+
         if (!Number.isSafeInteger(v)) throw new Error(`atomic amount ${v} exceeds JS safe-integer precision — pass it as a string or BigInt`);
         return BigInt(v);
     }
-    // only a string remains a meaningful atomic amount here — reject array/object/
-    // boolean (e.g. [100] would coerce to "100" and be silently accepted).
+
     if (typeof v !== 'string') throw new Error(`invalid atomic amount type: ${Array.isArray(v) ? 'array' : typeof v}`);
     const s = v.trim();
     if (!/^-?\d+$/.test(s)) throw new Error(`non-integer atomic amount: ${v}`);
     const r = BigInt(s);
-    if (r > MAX_PICO) throw new Error(`atomic amount exceeds uint64 max: ${v}`);   // a real on-chain amount is uint64
+    if (r > MAX_PICO) throw new Error(`atomic amount exceeds uint64 max: ${v}`);
     return r;
 }
 
-// classify the proof material: a 64-hex tx secret key, or an (Out|In)Proof
-// signature. returns 'txkey' | 'txproof' | null. shared by both verify
-// transports so they accept exactly the same inputs.
 function detectProofKind(proof) {
     if (typeof proof !== 'string') return null;
     const p = proof.trim();
@@ -136,43 +82,28 @@ function detectProofKind(proof) {
     return null;
 }
 
-// pure decision: map a verified proof/transfer result to a payment status.
-// does NOT gate unlock_time or replay — those are separate, stateful concerns.
-// shared by verifyPayment (monero-ts) and verifyPaymentViaRpc (wallet-rpc) so
-// the two transports can never drift on what counts as paid (the bug we found
-// in a downstream re-implementation: float amounts + a missing gate). amounts
-// in piconero (BigInt) — float never decides money.
-//   status: ok | invalid | no-funds | underpaid | mempool | unconfirmed
 function classifyResult({ isGood, receivedPico, confirmations, inTxPool }, { expectedPico, tolerancePico = 0n, minConfirmations = 1 }) {
     if (!isGood) return { status: 'invalid', reason: 'proof does not verify for this txid/address' };
     if (receivedPico <= 0n) return { status: 'no-funds', reason: 'this transaction sent nothing to this address' };
-    // clamp tolerance: a tolerance >= expectedPico would make the threshold <= 0, meaning
-    // any positive amount passes — mirrors the guard in summarizeTransfers and classify_payment.
+
     const threshold = (tolerancePico > 0n && tolerancePico < expectedPico) ? expectedPico - tolerancePico : expectedPico;
     if (receivedPico < threshold) {
-        // shortfall to reach the full expected amount, computed in piconero so the
-        // "send X more" the buyer is told is EXACT (float subtraction would drift).
+
         return {
             status: 'underpaid',
             reason: `received ${picoToXmr(receivedPico)} XMR, expected ${picoToXmr(expectedPico)}`,
             shortfallXmr: picoToXmrString(expectedPico - receivedPico),
         };
     }
-    // clamp minConfirmations so a negative value never bypasses the confirmation gate.
+
     if (confirmations < Math.max(0, minConfirmations | 0)) {
         return { status: inTxPool ? 'mempool' : 'unconfirmed', reason: `${confirmations}/${minConfirmations} confirmations` };
     }
     const overpaid = receivedPico > expectedPico;
-    // EXACT piconero string (not picoToXmr's float) — this is a refund amount the
-    // merchant may pay back; the 12th decimal must not drift. matches watch.js.
+
     return { status: 'ok', overpaid, overpaidXmr: overpaid ? picoToXmrString(receivedPico - expectedPico) : '0' };
 }
 
-// one shared verifier wallet per (node, network) — random keys, no secrets.
-// cached so a warm serverless instance pays the WASM open cost once. entries
-// expire after WALLET_TTL_MS so a long-running server picks up node changes and
-// never holds a wallet whose daemon connection went stale; checkOnNode also
-// drops the entry on any operation error so the next call rebuilds it.
 const walletCache = new Map();
 const WALLET_TTL_MS = 5 * 60 * 1000;
 function dropWallet(key) {
@@ -191,7 +122,7 @@ function verifierWallet(nodeUri, networkType) {
             return w;
         })().catch(err => { dropWallet(key); throw err; });
         const timer = setTimeout(() => dropWallet(key), WALLET_TTL_MS);
-        if (timer.unref) timer.unref();   // a pending eviction must not keep the process alive
+        if (timer.unref) timer.unref();
         entry = { promise, timer };
         walletCache.set(key, entry);
     }
@@ -207,13 +138,6 @@ function readCheck(c) {
     };
 }
 
-// classify a thrown verifier error. a SEMANTICALLY wrong proof (right shape,
-// wrong payment) returns isGood:false and never reaches here — but a MALFORMED
-// proof makes monero-ts throw a data error ("Wrong signature size", bad key,
-// parse failure): that is terminal, the proof is bad and retrying won't help. a
-// connection/daemon error is TRANSIENT — the node is unreachable, a retry may
-// work. default to transient: safer to tell a buyer "retry" on a flaky node than
-// to reject a real payment as invalid.
 const _DATA_ERR = /signature|invalid proof|secret key|tx key|parse|malformed|deserial/i;
 function isTransientError(e) {
     const m = (e && e.message) ? e.message : String(e);
@@ -229,31 +153,17 @@ async function checkOnNode({ nodeUri, networkType, txid, proofKind, proof, addre
             : await w.checkTxProof(txid, address, message, proof);
         return { nodeUri, ...readCheck(raw) };
     } catch (e) {
-        // classify before deciding whether to evict: a malformed proof makes
-        // monero-ts throw ("Wrong signature size") — that is NOT a node problem,
-        // so evicting would only force a pointless WASM cold-start on the next
-        // request. only evict on transient node/network failures.
+
         if (e && e.transient === undefined) {
-            try { e.transient = isTransientError(e); } catch { /* frozen error object */ }
+            try { e.transient = isTransientError(e); } catch {   }
         }
         if (e.transient !== false) dropWallet(key);
         throw e;
     }
 }
 
-// reject time-locked payments: a custom wallet can craft a tx whose outputs are
-// frozen via unlock_time — the proof verifies and confirmations accrue, but the
-// merchant cannot spend the funds (possibly for years). read the raw tx from the
-// daemon and require unlock_time === 0.
-//
-// read ONE node's unlock_time for a txid; null if it could not be read. the
-// tx_hash in the daemon response is cross-checked against the requested txid, so
-// a node cannot answer with a different (unlocked) tx's blob.
-// trim trailing slashes without a regex (avoids the /\/+$/ polynomial-ReDoS pattern on node URLs)
 const rtrimSlash = u => { u = String(u); let e = u.length; while (e > 0 && u.charCodeAt(e - 1) === 47) e--; return u.slice(0, e); };
 
-// guard against non-http(s) schemes reaching fetch() — file://, data:, javascript: etc.
-// throws early so the caller sees a configuration error, not a silent wrong result.
 function assertNodeUri(uri) {
     const u = new URL(String(uri));
     if (u.protocol !== 'http:' && u.protocol !== 'https:')
@@ -272,9 +182,7 @@ async function unlockTimeFromNode(uri, txid) {
         const j = await r.json();
         const tx = j && Array.isArray(j.txs) && j.txs[0];
         if (!tx || !tx.as_json) return null;
-        // require the daemon to echo a MATCHING tx_hash — a response that omits it
-        // (or returns a different tx's blob) cannot be trusted for the time-lock
-        // gate, so fail closed rather than read someone else's unlock_time.
+
         if (!tx.tx_hash || String(tx.tx_hash).toLowerCase() !== txid) return null;
         const decoded = JSON.parse(tx.as_json);
         if (decoded.unlock_time === undefined || decoded.unlock_time === null) return null;
@@ -282,7 +190,6 @@ async function unlockTimeFromNode(uri, txid) {
     } catch { return null; }
 }
 
-// read the chain tip from ONE node (plain /get_height). null if unreadable.
 async function daemonHeightFromNode(uri) {
     try {
         const r = await fetch(rtrimSlash(uri) + '/get_height', { method: 'GET', signal: AbortSignal.timeout(8000) });
@@ -292,21 +199,12 @@ async function daemonHeightFromNode(uri) {
         return (h == null) ? null : BigInt(String(h));
     } catch { return null; }
 }
-// the MINIMUM tip across the queried nodes — conservative, so a single node that
-// OVERSTATES the height can never unlock a time-locked output early.
+
 async function minHeightAcross(nodes) {
     const hs = (await Promise.all(nodes.map(daemonHeightFromNode))).filter(h => h !== null);
     return hs.length ? hs.reduce((m, h) => (h < m ? h : m)) : null;
 }
 
-// the time-lock gate must honor the SAME node-quorum as the proof step — else a
-// single lying node could report unlock_time=0 for a frozen tx and flip
-// locked -> paid even under quorum >= 2. quorum 1: first node that answers wins
-// (the merchant opted into single-node trust). quorum >= 2: read want+1 nodes in
-// parallel and require at least `want` to answer AND all answers to agree; one
-// disagreeing node trips it, exactly like checkOnNode. returns the agreed
-// unlock_time, or null when it cannot be established — fail CLOSED, the caller
-// does not mark paid. set skipUnlockTimeCheck only if you accept that risk.
 async function fetchUnlockTime(nodes, txid, quorum = 1) {
     const id = String(txid).toLowerCase();
     const want = Math.max(1, quorum | 0);
@@ -319,49 +217,10 @@ async function fetchUnlockTime(nodes, txid, quorum = 1) {
     }
     const targets = nodes.slice(0, Math.min(nodes.length, want + 1));
     const answered = (await Promise.all(targets.map(uri => unlockTimeFromNode(uri, id)))).filter(t => t !== null);
-    if (answered.length < want) return null;                              // not enough nodes vouched — fail closed
-    return answered.every(t => t === answered[0]) ? answered[0] : null;   // any disagreement — fail closed
+    if (answered.length < want) return null;
+    return answered.every(t => t === answered[0]) ? answered[0] : null;
 }
 
-/**
- * verifyPayment — re-verify a buyer-supplied payment proof on-chain.
- *
- * @param {object} opts
- * @param {string}   opts.txid               transaction id (64 hex)
- * @param {string}   opts.proof              tx secret key (64 hex) or tx proof signature ((Out|In)ProofV*)
- * @param {string}   opts.address            the payment address for THIS order
- * @param {string|number} opts.amount        expected XMR (string keeps 12-decimal nonces exact)
- * @param {string[]} opts.nodes              node URIs the merchant trusts, in preference order
- * @param {string}   [opts.networkType]      'mainnet' (default) | 'stagenet' | 'testnet'
- * @param {number}   [opts.minConfirmations] default 1; 0 accepts mempool (merchant's own risk)
- * @param {number}   [opts.quorum]           default 1; >=2 requires that many nodes to agree
- * @param {string}   [opts.message]          challenge message the proof was generated over (default '')
- * @param {number}   [opts.toleranceXmr]     accepted shortfall, default 0 (exact — keeps amount-nonce meaningful)
- * @param {boolean}  [opts.skipUnlockTimeCheck] default false; skips the time-lock guard (NOT recommended)
- * @param {function} [opts.alreadyUsed]      async (txid) => boolean — caller's replay check
- *
- * @returns {Promise<{paid:boolean,status:string,reason:string,receivedXmr:number,confirmations:number,txid:string,nodesAgreed:number}>}
- *   status: paid | underpaid | unconfirmed | mempool | no-funds | locked | invalid | replay | node-disagreement | node-error
- *   (node-error is transient/retryable — not enough nodes answered; the verdict statuses are terminal)
- *
- * REPLAY PROTECTION IS THE CALLER'S JOB, AND IT MUST BE ATOMIC. this function
- * proves a payment is real; it cannot know your order state. back `alreadyUsed`
- * with a UNIQUE constraint on the stored txid (or a synchronous check-and-claim)
- * — a plain async read has a TOCTOU window where two concurrent requests with
- * the same txid both pass and both orders settle. the returned `txid` is
- * normalized to lowercase; store and compare that form.
- */
-
-// resolve the per-node answers into a single verdict. groups answers into clusters
-// that agree on (isGood, receivedPico) and picks the largest — NOT answers[0], so a
-// bad node answering first can't block a real majority. a quorum is met only when
-// EXACTLY ONE cluster reaches `want`: two clusters that both reach it are two groups
-// of nodes that agree among themselves but contradict each other (e.g. 2 say paid, 2
-// say not-paid, want=2). resolving that by answer order would let node ordering — and
-// so an attacker who controls half the nodes and lists them first — decide a payment,
-// so an even split fails closed (agreed=false → node-disagreement). errored/absent
-// nodes never reach `answers`, so a down node in a want+1 list is still tolerated (it
-// is simply not a contradicting vote). pure + exported so the voting rule is unit-tested.
 function resolveQuorum(answers, want) {
     const clusters = new Map();
     for (const a of answers) {
@@ -389,9 +248,6 @@ async function verifyPayment(opts) {
 
     if (skipUnlockTimeCheck) warnOnce('skipUnlockTimeCheck is on — time-locked (unspendable) payments will be accepted as paid. leave it off unless you know exactly why.');
 
-    // normalize the txid: trim + lowercase. monerod treats it case-insensitively,
-    // but the caller's replay store does not — without this the same tx in a
-    // different case slips past an alreadyUsed(txid) check and pays twice.
     const id = String(txid == null ? '' : txid).trim().toLowerCase();
 
     const fail = (status, reason, extra = {}) => ({
@@ -400,15 +256,11 @@ async function verifyPayment(opts) {
         ...extra,
     });
 
-    // cheap input gates — reject garbage before any node RPC
     if (!isValidTxid(id)) return fail('invalid', 'txid must be 64 hex chars');
     if (!isValidAddress(address, networkType)) return fail('invalid', `address is not a valid ${networkType} address`);
     if (!Array.isArray(nodes) || nodes.length === 0) return fail('invalid', 'at least one node URI required');
-    nodes.forEach(assertNodeUri);  // throws on first non-http(s) URI — configuration error, not a runtime verdict
+    nodes.forEach(assertNodeUri);
 
-    // single-node quorum means one compromised/malicious node controls the entire
-    // verification result, including confirmations and unlock_time. the merchant
-    // opted into this risk, but make it visible so it doesn't pass silently.
     if (nodes.length === 1 && (quorum | 0) <= 1) warnOnce('quorum=1 with a single node: that node controls confirmations and unlock_time. set nodes to 2+ and quorum=2 to require independent agreement.');
     let expectedPico;
     try { expectedPico = xmrToPico(amount); } catch (e) { return fail('invalid', e.message); }
@@ -417,10 +269,6 @@ async function verifyPayment(opts) {
     const proofKind = detectProofKind(proof);
     if (!proofKind) return fail('invalid', 'proof must be a tx secret key (64 hex) or a tx proof signature (OutProofV*/InProofV*)');
 
-    // quorum 1: try nodes in order, first success wins (resilient, no cross-
-    // check). quorum >= 2: query want+1 in parallel and require that EVERY node
-    // that answered agrees — a single disagreeing node trips it, which is the
-    // whole point of asking more than one.
     const want = Math.max(1, quorum | 0);
     if (nodes.length < want) {
         return fail('invalid', `quorum ${want} needs at least ${want} nodes, but ${nodes.length} provided`);
@@ -440,10 +288,7 @@ async function verifyPayment(opts) {
     }
     if (answers.length < want) {
         const msgs = errs.map(e => (e && e.message) ? e.message : String(e));
-        // distinguish a transport failure (retryable → node-error) from a proof the
-        // verifier threw out. monero-ts THROWS on malformed proof data ("Wrong
-        // signature size" — e.g. a truncated paste), which is NOT a node problem.
-        // if EVERY failure is such a data error, it is the proof: terminal `invalid`.
+
         const proofRejected = errs.length > 0 && errs.every(e => e && e.transient === false);
         return proofRejected
             ? fail('invalid', `proof rejected by the verifier (${msgs.join('; ')})`)
@@ -459,8 +304,7 @@ async function verifyPayment(opts) {
 
     const confirmations = Math.min(...answers.map(a => a.confirmations));
     const receivedXmr = picoToXmr(head.receivedPico);
-    // expose the exact piconero too — callers that sum multiple payments (e.g.
-    // verifying a multi-tx receipt) must not go through the float `receivedXmr`.
+
     const base = { receivedXmr, receivedPico: head.receivedPico.toString(), confirmations, txid: id, nodesAgreed: answers.length, expectedXmr: picoToXmr(expectedPico) };
 
     const tolerancePico = toleranceXmr ? xmrToPico(toleranceXmr) : 0n;
@@ -469,25 +313,19 @@ async function verifyPayment(opts) {
         { expectedPico, tolerancePico, minConfirmations });
     if (cls.status !== 'ok') return { paid: false, status: cls.status, reason: cls.reason, shortfallXmr: cls.shortfallXmr, ...base };
 
-    // time-lock gate: amount and confirmations can both look right while the
-    // outputs are frozen by unlock_time — that is not money the merchant can
-    // spend, so it does not count as paid.
     if (!skipUnlockTimeCheck) {
         const unlockTime = await fetchUnlockTime(nodes, id, want);
         if (unlockTime === null) {
             return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — nodes did not return the tx or disagreed; not marking paid (add nodes or retry)', ...base };
         }
         if (unlockTime !== 0n) {
-            // a FUTURE unlock_time is the freeze scam (unspendable). but an
-            // ALREADY-ELAPSED unlock_time means the funds are spendable now — accept
-            // it, matching watch mode (rejecting those threw away legit payments).
-            // Monero: unlock_time < 5e8 is a block height, else a unix timestamp.
+
             let elapsed;
             if (unlockTime >= 500000000n) {
                 elapsed = BigInt(Math.floor(Date.now() / 1000)) >= unlockTime;
             } else {
                 const tip = await minHeightAcross(nodes);
-                // can't confirm the lock elapsed → treat as still locked (conservative).
+
                 elapsed = tip !== null && tip >= unlockTime;
             }
             if (!elapsed) {
@@ -496,14 +334,10 @@ async function verifyPayment(opts) {
         }
     }
 
-    // replay gate last — only a cryptographically valid, sufficient payment
-    // reaches here. the caller's own order storage is the source of truth.
     if (alreadyUsed && await alreadyUsed(id)) {
         return { paid: false, status: 'replay', reason: 'this txid was already used to pay another order', ...base };
     }
 
-    // overpaid still counts as paid, but the merchant gets told so they can
-    // decide whether to refund the difference (cls computed it above).
     return {
         paid: true, status: 'paid', reason: 'verified on-chain',
         overpaid: cls.overpaid, overpaidXmr: cls.overpaidXmr,

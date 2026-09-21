@@ -1,24 +1,6 @@
-// signed merchant config.
-//
-// the payment address shown to a buyer is only as trustworthy as the page that
-// renders it. if a merchant's site is compromised, an attacker can swap the
-// address and steal payments. signing fixes the part that matters: the signing
-// key lives OFF the web server (offline, or a separate box), so a server
-// breach can serve the real signed config or a broken one — it cannot mint a
-// new one pointing at the attacker's address.
-//
-// the widget verifies the signature and shows the signer fingerprint. a buyer
-// who knows the merchant's fingerprint out of band (a label on the product, a
-// pinned value, a directory entry) catches a swap even on a fully owned page.
-// without that out-of-band anchor, signing still gives tamper-evidence: a
-// "signed" config that no longer verifies is a loud red flag.
-//
-// Ed25519, so the same keys work in node (crypto) and the browser (WebCrypto).
-
+// Sign and verify merchant checkout configurations.
 const crypto = require('crypto');
 
-// deterministic JSON: keys sorted at every level, no whitespace. both signer
-// and verifier must hash the exact same bytes.
 function canonical(v) {
     if (v === null || typeof v !== 'object') return JSON.stringify(v);
     if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
@@ -33,20 +15,12 @@ function generateSigningKey() {
     };
 }
 
-// short, human-checkable id for a public key — the thing a buyer compares
-// against a known value. 96 bits / six groups of four hex, e.g.
-// a1b2-c3d4-e5f6-7890-1234-5678. forging a key whose fingerprint matches a
-// published one is a targeted preimage: 96 bits puts that out of reach, while
-// six short groups still fit on a label or a screen for a human to eyeball.
 function configFingerprint(publicKeyPem) {
     const der = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
     const h = crypto.createHash('sha256').update(der).digest('hex');
     return h.slice(0, 24).match(/.{4}/g).join('-');
 }
 
-// sign a config object. only put fields that decide where money goes or how
-// much (address, amount, networkType) inside `config` — that is what the
-// signature protects. returns a self-contained envelope safe to embed or host.
 function signConfig(config, privateKeyPem) {
     const key = crypto.createPrivateKey(privateKeyPem);
     const sig = crypto.sign(null, Buffer.from(canonical(config)), key);
@@ -61,9 +35,6 @@ function signConfig(config, privateKeyPem) {
     };
 }
 
-// verify an envelope. pass `expectedFingerprint` (or `expectedPubkey`) to pin a
-// known signer — without a pin you only learn "internally consistent", which is
-// tamper-evidence, not identity. returns { valid, reason, config, fingerprint }.
 function verifyConfig(envelope, { expectedFingerprint = null, expectedPubkey = null } = {}) {
     if (!envelope || typeof envelope !== 'object' || !envelope.config || !envelope.sig || !envelope.pubkey) {
         return { valid: false, reason: 'not a signed config', config: null, fingerprint: null };

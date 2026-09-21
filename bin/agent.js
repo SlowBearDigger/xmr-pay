@@ -1,14 +1,6 @@
 #!/usr/bin/env node
+// Configure and start the local view-only payment agent.
 'use strict';
-// xmr-pay — the one-command, non-custodial Monero payment agent.
-//
-//   npx xmr-pay           first run → setup wizard, then start
-//   npx xmr-pay start     run with the saved config
-//   npx xmr-pay init      (re)run the wizard only
-//
-// non-custodial: it holds ONLY your view key — it can SEE payments, never spend
-// them. funds land straight in your wallet. your config + view key never leave
-// this machine. it serves a tiny localhost API your store talks to.
 
 const fs = require('fs');
 const path = require('path');
@@ -21,12 +13,17 @@ const { requestNode } = require('../src/node-transport');
 const DATA_DIR = process.env.XMR_PAY_DIR || path.resolve(process.cwd(), 'xmr-pay-data');
 const CONFIG = path.join(DATA_DIR, 'config.json');
 
+function ensurePrivateDataDir() {
+    fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    if (!fs.lstatSync(DATA_DIR).isDirectory()) throw new Error('agent data path must be a directory, not a symlink');
+    if (process.platform !== 'win32') fs.chmodSync(DATA_DIR, 0o700);
+}
+
 const A = { rst: '\x1b[0m', o: '\x1b[38;5;208m', dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', r: '\x1b[31m' };
 const say = (s = '') => console.log(s);
 const orange = s => A.o + s + A.rst;
 const dim = s => A.dim + s + A.rst;
-// a line reader robust to BOTH an interactive TTY and piped/buffered stdin
-// (rl.question loses lines that arrive before it is called; a queue does not).
+
 function makeReader() {
     let muted = false;
     const terminal = !!process.stdin.isTTY;
@@ -53,7 +50,7 @@ async function ask(rd, q, { def = '', validate, hint } = {}) {
     for (; ;) {
         process.stdout.write(`  ${q}${def ? dim(' [' + def + ']') : ''}: `);
         const line = await rd.next();
-        const ans = (line === null ? '' : String(line).trim()) || def;   // EOF → default
+        const ans = (line === null ? '' : String(line).trim()) || def;
         if (validate) { const err = validate(ans); if (err) { say(A.r + '  ✗ ' + err + A.rst); continue; } }
         return ans;
     }
@@ -77,7 +74,6 @@ function hiddenAnswer(line) {
     return line === null ? '' : String(line);
 }
 
-// loose Monero address sanity — the wallet does the real check on boot.
 const addrCheck = a => /^[1-9A-HJ-NP-Za-km-z]{95,106}$/.test(a) ? null : 'that does not look like a Monero address';
 const viewKeyCheck = k => /^[0-9a-fA-F]{64}$/.test(k) ? null : 'a private view key is exactly 64 hex characters';
 
@@ -159,16 +155,11 @@ async function wizard() {
     const webhookUrl = await ask(rd,'Store webhook URL (blank to add later)', { def: '' });
     const port = await ask(rd,'Port', { def: '8788', validate: a => /^\d+$/.test(a) ? null : 'a port number' });
     const toleranceXmr = await ask(rd,'Underpayment tolerance in XMR', { def: '0', hint: 'accept if the buyer is short by up to this (dust/fee/rounding); 0 = exact', validate: a => /^\d+(\.\d{1,12})?$/.test(a) ? null : 'an XMR amount like 0 or 0.0001' });
-    // settlement speed = how many confirmations before an order is "paid" (the
-    // value-at-risk knob, like BTCPay's SpeedPolicy). instant accepts a mempool tx
-    // (0-conf) — still gated by double_spend_seen + unlock_time, so it's safer than
-    // a naive 0-conf, but a mempool tx can still be dropped; use it for small/digital.
+
     const speed = await ask(rd,'Settlement speed', { def: 'fast', hint: 'instant = 0-conf, accept on sight (~instant, small amounts) · fast = 1 block (~2 min) · secure = 10 blocks (fully unlocked)', validate: a => ['instant', 'fast', 'secure'].includes(a) ? null : 'instant, fast, or secure' });
     const minConfirmations = speed === 'instant' ? 0 : speed === 'secure' ? 10 : 1;
     rd.close();
 
-    // restore height = the node's current tip, so it scans from NOW — instant, no
-    // historical rescan. that "scan from genesis" wait is the #1 setup footgun.
     say();
     say(dim('  Checking every configured node…'));
     const nodeHeights = await probeNodeHeights(nodes);
@@ -189,10 +180,10 @@ async function wizard() {
         webhookSecret: webhookUrl ? 'whsec_' + crypto.randomBytes(16).toString('hex') : undefined,
         token: crypto.randomBytes(16).toString('hex'),
         port: Number(port), minConfirmations, pool: 8, toleranceXmr,
-        expiryHours: 24,           // drop unpaid orders after a day (bounds work + memory; 0 = never)
-        paidRetentionHours: 168,   // retire settled orders after a week (store stays bounded; 0 = keep)
+        expiryHours: 24,
+        paidRetentionHours: 168,
     };
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    ensurePrivateDataDir();
     fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2), { mode: 0o600 });
     fs.chmodSync(CONFIG, 0o600);
     say();
@@ -220,19 +211,21 @@ function npmInstallEnv(source = process.env) {
     return clean;
 }
 
-// make sure the Monero engine (monero-ts, a large WASM peer dep) is available;
-// install it once into the data dir if missing, so `npx xmr-pay` is truly one
-// command. then make require('monero-ts') resolve from there.
 function ensureMonero() {
-    try { require.resolve('monero-ts'); return; } catch { /* not in the usual place */ }
+    try { require.resolve('monero-ts'); return; } catch {   }
     const localNM = path.join(DATA_DIR, 'node_modules');
     let present = false;
-    try { require.resolve('monero-ts', { paths: [localNM] }); present = true; } catch { /* install below */ }
+    try { require.resolve('monero-ts', { paths: [localNM] }); present = true; } catch {   }
     if (!present) {
         say(orange('  Setting up the Monero engine (one-time download)…'));
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        // execFileSync (args array, no shell) so DATA_DIR can never be interpreted
-        // by a shell — it's a path, not a command fragment.
+        ensurePrivateDataDir();
+
+        const manifest = path.join(DATA_DIR, 'package.json');
+        if (fs.existsSync(manifest) && fs.lstatSync(manifest).isSymbolicLink()) throw new Error('engine package manifest must not be a symlink');
+        const pkg = fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, 'utf8')) : { private: true };
+        pkg.overrides = { ...pkg.overrides, 'serialize-javascript': '^7.0.5', uuid: '^11.1.1' };
+        fs.writeFileSync(manifest, JSON.stringify(pkg, null, 2) + '\n', { mode: 0o600 });
+
         const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
         require('child_process').execFileSync(
             npm, ['install', 'monero-ts@^0.11', '--no-save', '--no-audit', '--no-fund', '--loglevel=error', '--prefix', DATA_DIR],
@@ -242,8 +235,6 @@ function ensureMonero() {
     require('module').Module._initPaths();
 }
 
-// map the saved config onto the env vars the agent reads (kept pure + exported
-// so it can be unit-tested without booting the wallet).
 function applyConfig(cfg, dataDir = DATA_DIR, e = process.env) {
     e.XMR_NETWORK = cfg.network;
     e.XMR_PRIMARY_ADDRESS = cfg.address;
@@ -273,11 +264,14 @@ function applyConfig(cfg, dataDir = DATA_DIR, e = process.env) {
 }
 
 function start() {
+    ensurePrivateDataDir();
     if (!fs.existsSync(CONFIG)) { say(A.r + '  No config yet — run: ' + A.rst + orange('npx xmr-pay')); process.exit(1); }
+    if (fs.lstatSync(CONFIG).isSymbolicLink()) throw new Error('agent config must not be a symlink');
+    if (process.platform !== 'win32') fs.chmodSync(CONFIG, 0o600);
     const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
     ensureMonero();
     applyConfig(cfg);
-    require('../examples/scanner-agent.js'); // reads process.env at load
+    require('../examples/scanner-agent.js');
 }
 
 async function main() {
@@ -296,7 +290,7 @@ async function main() {
     start();
 }
 
-module.exports = { applyConfig, hiddenAnswer, makeReader, npmInstallEnv, probeNodeHeights };  // for tests; CLI only runs when invoked directly
+module.exports = { applyConfig, hiddenAnswer, makeReader, npmInstallEnv, probeNodeHeights };
 
 if (require.main === module) {
     main().catch(e => { console.error(e); process.exit(1); });

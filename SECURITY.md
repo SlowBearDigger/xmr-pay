@@ -54,7 +54,7 @@ keys.
 
 ## Dependencies
 
-`xmr-pay` itself ships **zero runtime npm dependencies** and no known CVEs. The
+`xmr-pay` itself ships **zero mandatory runtime npm dependencies**. The
 one library it needs for QR rendering (`qrcode-generator`, MIT, no deps of its
 own) is vendored verbatim in `src/vendor/` — nothing is pulled from the registry
 at install time. Payment links, QR, signed configs, and the widget need nothing
@@ -80,8 +80,7 @@ transitive dependencies that currently carry advisories:
 }
 ```
 
-After `npm install`, `npm audit` reports zero vulnerabilities. The live demo
-(`demo/`) ships these overrides.
+The automatic CLI installer writes these overrides before installing its engine. Existing installations and applications that supply their own `monero-ts` must apply the overrides in their own package manifest and reinstall dependencies. The live demo (`demo/`) also ships them. Check `npm audit` after installation; results depend on the resolved versions and current advisories.
 
 **Or skip `monero-ts` entirely.** If you run a `monero-wallet-rpc`,
 `verifyPaymentViaRpc` (`xmr-pay/watch`) verifies the same proofs through its

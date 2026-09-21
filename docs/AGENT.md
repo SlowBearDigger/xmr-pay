@@ -71,12 +71,13 @@ subaddress; when the confirmed, spendable total covers the amount, the order is
 
 ## Quickstart
 
-Needs Node and `monero-ts` (the only non-core dependency — `npm i monero-ts`).
+Needs Node 20 or later and `monero-ts` (the only non-core dependency — `npm i monero-ts`).
 `monero-ts` pins two old transitive deps with advisories; patch them with npm
 `overrides` in your deployment's `package.json` (recipe in
 [SECURITY.md](../SECURITY.md#dependencies) — `npm audit` then reports zero).
 
 ```bash
+export AGENT_TOKEN="$(openssl rand -hex 32)"
 XMR_PRIMARY_ADDRESS="4your_primary_address…" \
 XMR_VIEW_KEY="your_private_view_key" \
 XMR_NETWORK=stagenet \
@@ -91,11 +92,11 @@ Create an order from your shop backend, show the buyer the address, poll for sta
 
 ```bash
 # create
-curl -s -XPOST localhost:8788/order -d '{"id":"ord_42","amount":"0.05"}'
+curl -s -XPOST localhost:8788/order -H "Authorization: Bearer $AGENT_TOKEN" -H 'Content-Type: application/json' -d '{"id":"ord_42","amount":"0.05"}'
 # → {"id":"ord_42","address":"8B…","amount":"0.05","status":"pending","birthdayHeight":2140925}
 
 # check (your backend polls, or rely on the webhook)
-curl -s localhost:8788/order/ord_42
+curl -s localhost:8788/order/ord_42 -H "Authorization: Bearer $AGENT_TOKEN"
 # → {"paid":false,"status":"partial","receivedXmr":0.02,"shortfallXmr":"0.03",…}
 # …buyer tops up…
 # → {"paid":true,"status":"paid","receivedXmr":0.05,"shortfallXmr":"0",…}
@@ -122,10 +123,8 @@ verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signatur
 | `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order|/receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
 | `POLL_MS` | | `15000` | how often the poller re-checks pending orders |
 | `FULFILL_WEBHOOK_URL` / `_SECRET` | | — | where + how to sign the `order.paid` webhook |
-| `AGENT_TOKEN` | | — | `Bearer` token for order, receipt, and health endpoints; required when `BIND` is not loopback |
-| `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost; a non-loopback bind requires `AGENT_TOKEN` |
-
-Set `AGENT_TOKEN` whenever a reverse proxy exposes any agent endpoint, even if the agent itself binds to `127.0.0.1`. Expose only the routes buyers need; never proxy the entire agent API.
+| `AGENT_TOKEN` | | — | `Bearer` token for order, receipt, and health endpoints; required on every bind address |
+| `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost; every bind requires `AGENT_TOKEN` |
 | `XMR_SUBADDRESS_POOL` | | `8` | how many fresh subaddresses to pre-derive so `POST /order` never blocks on the wallet |
 | `XMR_SYNC_TIMEOUT_MS` | | `120000` | per-sync and protected-node RPC deadline; on a stall the agent fails over to the next node |
 | `XMR_SYNC_GAP` | | `2` | lookahead gap when scanning subaddresses |
@@ -136,6 +135,10 @@ Set `AGENT_TOKEN` whenever a reverse proxy exposes any agent endpoint, even if t
 | `XMR_WALLET_PASSWORD` | | — | encrypts the persisted wallet file at `XMR_WALLET_PATH` |
 | `XMR_ORDERS_FILE` | | in `XMR_PAY_DIR` | path to the orders ledger (JSON) |
 | `XMR_PAY_DIR` | | `./xmr-pay-data` | data dir for the `npx xmr-pay` CLI (config, wallet, orders, keys) |
+
+Set `AGENT_TOKEN` whenever a reverse proxy exposes any agent endpoint, even if the agent itself binds to `127.0.0.1`. Expose only the routes buyers need; never proxy the entire agent API.
+
+Keep `XMR_PAY_DIR` outside the web root on a filesystem that enforces file ownership. On Unix, the CLI sets the data directory to mode `700` and its config to `600` on setup and start.
 
 #### Protected nodes and failover
 
@@ -183,7 +186,7 @@ directory private and out of source control.
 
 ## API
 
-- `POST /order` `{amount, id?, label?}` → `{id, address, amount, status, birthdayHeight}` — derives a fresh per-order subaddress. (Requires `Authorization: Bearer <AGENT_TOKEN>` if set.)
+- `POST /order` `{amount, id?, label?}` → `{id, address, amount, status, birthdayHeight}` — derives a fresh per-order subaddress. (Requires `Authorization: Bearer <AGENT_TOKEN>`.)
 - `GET /order/:id` → `{paid, status, amount, receivedXmr, lockedXmr, shortfallXmr, confirmations, txids}` — live on-chain status.
 - `GET /healthz` → `{ok, network, node, viewOnly, orders}`.
 
