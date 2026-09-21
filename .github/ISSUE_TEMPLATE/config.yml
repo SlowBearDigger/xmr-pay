@@ -2,4 +2,4 @@ blank_issues_enabled: true
 contact_links:
   - name: Security report (verification bypass, replay, address swap)
     url: https://github.com/SlowBearDigger/xmr-pay/security/advisories/new
-    about: Private vulnerability reporting — never a public issue.
+    about: Report vulnerabilities privately.

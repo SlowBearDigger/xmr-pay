@@ -1,7 +1,4 @@
-# manual-trigger template — wire MINISIGN_KEY and NPM_TOKEN secrets, then
-# switch `on:` to push tags ['v*'] for automatic releases. publishes to npm
-# with provenance (ties the package to this repo + commit via Sigstore) and
-# attaches signed SHA256SUMS to the GitHub release.
+# Manual release workflow; requires signing and npm credentials.
 name: release
 on:
   workflow_dispatch:

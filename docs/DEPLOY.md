@@ -1,115 +1,57 @@
-# Deploy the verify function (serverless, free tier)
+# Deploying a proof endpoint
 
-The only server piece is one stateless function that re-checks a buyer's proof
-on-chain. Your static checkout (GitHub Pages, anywhere) calls it; it never sees
-a third party. This is the **private, per-user, real-time** detection path —
-the one to use for a store.
+[`examples/serverless.js`](../examples/serverless.js) shows how to verify a buyer's transaction ID and proof against server-owned order data. It is a reference handler, not a complete store: its order map and rate limiter are in memory.
 
-Reference handler: [`examples/serverless.js`](../examples/serverless.js).
+## Requirements
 
-## What it needs
+Use Node 20 or later with `xmr-pay` and `monero-ts`. Follow the [dependency overrides](../SECURITY.md#dependencies) and check the resolved installation. WASM verification needs a Node runtime; this example does not support edge runtimes. Allow enough startup time for the wallet library and node requests.
 
-- Node 18+ runtime (Vercel/Netlify/Render functions, or your own server). It
-  uses `monero-ts` (WASM) for verification — that runs in Node serverless, but
-  **not on edge runtimes** (Cloudflare Workers / Vercel Edge). Use a Node
-  function, not edge.
-- `monero-ts` as a dependency: `npm i xmr-pay monero-ts`. It pins two old
-  transitive deps with advisories (`serialize-javascript`, `uuid`); clear them
-  with npm `overrides` — `{ "serialize-javascript": "^7.0.5", "uuid": "^11.1.1" }`
-  takes `npm audit` to zero. Details: [SECURITY.md](../SECURITY.md#dependencies).
-- Your order store. The example uses an in-memory `Map`; swap it for your real
-  database and put a **`UNIQUE` constraint on `tx_hash`** (the atomic replay
-  guard).
+Before accepting orders, replace the sample `ORDERS` map with durable storage. Load the expected address and amount from that record. Atomically claim the transaction ID and mark the order paid in one database transaction, with a unique transaction-hash constraint. Persist fulfillment work so it can be retried after a crash.
 
-## Vercel (one file)
+The sample's webhook send has bounded retries only. It does not implement the watch agent's durable redelivery queue. The sample also has no automatic order-expiry policy.
 
-```
-your-project/
-  api/verify-payment.js   ← paste examples/serverless.js here
-  package.json            ← deps: xmr-pay, monero-ts
-```
+## Configuration
 
-Set env vars in the Vercel dashboard:
+| Variable | Purpose |
+|---|---|
+| `XMR_ADDRESS` | address for the sample order |
+| `XMR_NODES` | comma-separated node URLs |
+| `XMR_QUORUM` | number of agreeing nodes required; default `2` |
+| `CORS_ORIGIN` | allowed browser origin; set the exact store origin |
+| `VERIFY_TOKEN` | optional server-to-server bearer secret; never embed it in a widget |
+| `VERIFY_RL_MAX` | per-process requests per IP per 60-second window; default `30` |
+| `FULFILL_WEBHOOK_URL` | optional fulfillment destination |
+| `FULFILL_WEBHOOK_SECRET` | shared HMAC secret when sending a webhook |
 
-| var | value |
-|-----|-------|
-| `XMR_ADDRESS` | your Monero address (proof mode reads `XMR_ADDRESS`; the watch agent uses `XMR_PRIMARY_ADDRESS`) |
-| `XMR_NODES` | comma-separated node URLs you trust (your own first) |
-| `XMR_QUORUM` | optional — how many nodes must agree before a payment counts (default `2`); set `1` for single-node trust |
-| `CORS_ORIGIN` | your site origin, e.g. `https://you.github.io` (or `*` for a public tip endpoint) |
-| `VERIFY_TOKEN` | optional — require this as a `Bearer` token on the verify endpoint (shared secret gate) |
-| `VERIFY_RL_MAX` | optional — max verify requests per IP per window (rate-limit cap) |
-| `FULFILL_WEBHOOK_URL` | optional — where to POST `order.paid` |
-| `FULFILL_WEBHOOK_SECRET` | optional — HMAC secret for that webhook |
+The example calls `verifyPayment` with its default mainnet network. For stagenet, pass `networkType: 'stagenet'` in that call and use matching addresses and nodes. Setting an unused environment variable does not change the network.
 
-Deploy. Your endpoint is `https://your-app.vercel.app/api/verify-payment`.
+## Hosting
 
-## Plain Node / Express
+For a Node serverless host, place the handler at the platform's function route, install its dependencies and connect the durable order store. Provider request limits must accommodate WASM startup and node verification. For Express:
 
 ```js
 const express = require('express');
-const handler = require('./serverless');   // the reference handler
+const handler = require('./serverless');
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '16kb' }));
 app.all('/api/verify-payment', handler);
-app.listen(3000);
+app.listen(3000, '127.0.0.1');
 ```
 
-Render / Railway / Fly / a VPS all work the same way.
+Use a TLS reverse proxy for public traffic. The example trusts `x-forwarded-for` for rate limiting, so the proxy must overwrite that header. Enforce shared rate limits at the proxy or application layer when using multiple instances. CORS controls browser access; it is not endpoint authentication.
 
-## Wire the widget to it
+## Widget
+
+Render the amount and address from the same order record used by the verifier:
 
 ```html
 <xmr-pay
-  address="4YOUR_ADDRESS…"
-  amount="0.050000004821"
+  address="4YOUR_ADDRESS"
+  amount="0.050000000817"
   order="ord_123"
-  verify-url="https://your-app.vercel.app/api/verify-payment"></xmr-pay>
+  verify-url="/api/verify-payment"></xmr-pay>
 ```
 
-The buyer pays, expands "prove it", pastes the tx key/proof; the widget POSTs to
-your function; your function verifies on-chain and returns `paid`. The widget
-flips to confirmed and fires `xmr-pay:paid`.
+The buyer submits a transaction ID and tx key or proof. The widget displays the result and may emit `xmr-pay:paid`; fulfillment belongs to the server. This proof path needs no merchant view key.
 
-## CORS, the part everyone hits
-
-If the widget's page and the function are on different origins (a github.io site
-calling a vercel.app function), the browser sends a preflight `OPTIONS` and
-requires `Access-Control-Allow-Origin`. The reference handler sets it from
-`CORS_ORIGIN`. Set that to your exact site origin in production; `*` only for a
-public, no-secrets tip endpoint.
-
-## Rate limiting (the endpoint is public)
-
-Anyone can POST to your verify URL, so treat it like any public endpoint.
-
-Two cheap gates already blunt most abuse, **before** any node is contacted:
-the handler rejects an unknown `order_id` (cheap 404) and a malformed proof
-(input validation in `verifyPayment`). What survives both is the costly case:
-a well-formed-but-wrong proof against a real pending order, which forces a node
-RPC. Cap that:
-
-```js
-// per-order attempt cap — crude but effective, pairs with the existing gates
-const attempts = new Map();
-function tooMany(order_id) {
-  const n = (attempts.get(order_id) || 0) + 1;
-  attempts.set(order_id, n);
-  return n > 20;                  // a real buyer needs one or two tries
-}
-// in the handler, before verifyPayment:
-if (tooMany(order_id)) return res.status(429).json({ error: 'too many attempts' });
-```
-
-For real traffic use your platform's rate limiter (Vercel/Cloudflare WAF) or a
-shared store (Upstash/Redis) keyed by IP + order. Orders also expire, so a
-stale order can't be hammered forever.
-
-## Why not pure client-side?
-
-You can skip the function entirely and scan in the browser — but then the
-**view key has to live in the page**, public to everyone, and the page carries
-a full `monero-ts` WASM wallet that syncs the chain on every load (heavy, and
-the flaky part of any such setup). That is only acceptable for a public
-donation address where you don't mind every incoming payment being visible.
-For a store, run the function — the view key never leaves your machine.
+For cross-origin requests, set `CORS_ORIGIN` to the checkout origin. The sample allows the `Content-Type` header. A private bearer-protected endpoint should be called by your backend, since the widget has no bearer-token option.

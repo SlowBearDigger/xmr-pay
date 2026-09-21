@@ -2,12 +2,12 @@
 
 xmr-pay verifies money. If you find a way to make `verifyPayment` say `paid`
 for a payment that didn't happen, didn't arrive, can't be spent, or already
-paid a different order — that's the bug we care about most.
+paid a different order: that's the bug we care about most.
 
 ## Reporting
 
 Use GitHub's private vulnerability reporting on this repository, or email
-slowbeardigger@proton.me. Solo maintainer, best-effort response — payment
+slowbeardigger@proton.me. Solo maintainer, best-effort response: payment
 bypass reports get priority over everything else.
 
 Please include: the scenario, a proof of concept against stagenet if you can,
@@ -39,16 +39,16 @@ keys.
 
 | You try | Expected |
 |---|---|
-| A tx with `unlock_time` set (funds frozen) | `locked` — never `paid`. Fails closed if no node returns the tx. |
-| A node that lies about `unlock_time` (reports `0` for a frozen tx) | caught under `quorum: 2+` — the unlock check is quorum'd like the proof step, so one disagreeing node trips it (fail closed). The tx hash in the daemon reply is also cross-checked against the txid. Run your own node first regardless. |
-| The same valid proof on a second order | `replay` (via `alreadyUsed`) and/or `underpaid` (via amount-nonce). |
-| An amount off by one piconero | `underpaid` — comparison is integer piconero. |
-| A proof for a payment to a different address | rejected — proofs are address-bound. |
-| A payment split across two txs, in **proof** mode | `underpaid` — proof verifies one tx. Use watch mode for splits. |
+| A tx with an explicit `unlock_time` that has not elapsed | `locked`: never `paid`. Fails closed if no node returns the tx. |
+| A node that lies about `unlock_time` (reports `0` for a frozen tx) | caught under `quorum: 2+`: the unlock check is quorum'd like the proof step, so one disagreeing node trips it (fail closed). The tx hash in the daemon reply is also cross-checked against the txid. Run your own node first regardless. |
+| The same valid proof on a second order | `alreadyUsed` detects prior use; an atomic transaction claim is still required to prevent concurrent acceptance. An amount nonce is not a replay guard. |
+| An amount off by one piconero | `underpaid`: comparison is integer piconero. |
+| A proof for a payment to a different address | rejected: proofs are address-bound. |
+| A payment split across two txs, in **proof** mode | `underpaid`: proof verifies one tx. Use watch mode for splits. |
 | A node that lies about confirmations / existence | denial fails closed; over-reporting is caught by `quorum: 2+`. |
 | Mempool / 0-conf tx | `mempool`/`unconfirmed` unless `minConfirmations: 0`. |
-| Pasting an address or amount into the request body | ignored — both come from your order record, not the request. |
-| Faking "paid" in the browser — forging the `xmr-pay:paid` event, editing the DOM, or pointing `verify-url` at a fake server | cosmetic. The widget runs in the buyer's browser and decides nothing; your server re-verifies on-chain and your order record is the source of truth. Only dangerous if you fulfill from the client — don't (see README hardening). |
+| Pasting an address or amount into the request body | ignored: both come from your order record, not the request. |
+| Faking "paid" in the browser: forging the `xmr-pay:paid` event, editing the DOM, or pointing `verify-url` at a fake server | cosmetic. The widget runs in the buyer's browser and decides nothing; your server re-verifies on-chain and your order record is the source of truth. Only dangerous if you fulfill from the client: don't (see README hardening). |
 | A flood of requests to the verify endpoint | your problem to rate-limit (see docs/DEPLOY.md); unknown/garbage are rejected before any node RPC. |
 | A proof from a seed-restored wallet for an old tx | works if the wallet still holds the tx key; restored wallets often don't (see docs/WALLETS.md). |
 
@@ -56,27 +56,28 @@ keys.
 
 `xmr-pay` itself ships **zero mandatory runtime npm dependencies**. The
 one library it needs for QR rendering (`qrcode-generator`, MIT, no deps of its
-own) is vendored verbatim in `src/vendor/` — nothing is pulled from the registry
+own) is vendored verbatim in `src/vendor/`: nothing is pulled from the registry
 at install time. Payment links, QR, signed configs, and the widget need nothing
 else.
 
-On-chain verification needs `monero-ts` — a large WASM library, declared as an
-**optional peer dependency**. You only install it for the server-side verify
-function; the buyer-facing checkout never loads it. `monero-ts` pins two old
+On-chain verification needs `monero-ts`: a large WASM library, declared as an
+**optional peer dependency**. Install it for the server-side WASM verifier or watch scanner; the buyer-facing checkout never loads it. `monero-ts` pins two old
 transitive dependencies that currently carry advisories:
 
 | Package | Advisory | Reachable here? |
 |---|---|---|
-| `serialize-javascript` `^3.1.0` | High — RCE via crafted object ([GHSA-5c6j-r48x-rmvq](https://github.com/advisories/GHSA-5c6j-r48x-rmvq)) | Low — `monero-ts` serializes wallet state built from *your* keys, not buyer input. |
-| `uuid` `3.3.2` | Moderate — buffer bounds, only when a `buf` arg is passed ([GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq)) | No — `monero-ts` generates ids without a buffer. |
+| `serialize-javascript` `^3.1.0` | High: RCE via crafted object ([GHSA-5c6j-r48x-rmvq](https://github.com/advisories/GHSA-5c6j-r48x-rmvq)) | Low: `monero-ts` serializes wallet state built from *your* keys, not buyer input. |
+| `uuid` `3.3.2` | Moderate: buffer bounds, only when a `buf` arg is passed ([GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq)) | No: `monero-ts` generates ids without a buffer. |
 
 `monero-ts` hasn't bumped them upstream. Patch them in your deployment with npm
-`overrides` — both are drop-in and validated against a real on-chain verify:
+`overrides`: the resolved versions have been exercised with the wallet; test your deployment after reinstalling:
 
 ```json
-"overrides": {
-  "serialize-javascript": "^7.0.5",
-  "uuid": "^11.1.1"
+{
+  "overrides": {
+    "serialize-javascript": "^7.0.5",
+    "uuid": "^11.1.1"
+  }
 }
 ```
 
@@ -84,14 +85,14 @@ The automatic CLI installer writes these overrides before installing its engine.
 
 **Or skip `monero-ts` entirely.** If you run a `monero-wallet-rpc`,
 `verifyPaymentViaRpc` (`xmr-pay/watch`) verifies the same proofs through its
-`check_tx_key` / `check_tx_proof` over JSON-RPC — no WASM peer, so none of the
+`check_tx_key` / `check_tx_proof` over JSON-RPC: no WASM peer, so none of the
 advisories above are in your tree at all. It shares the exact same gates as
 `verifyPayment` (amount math, time-lock, replay), via a common `classifyResult`,
-so the two transports never disagree on what counts as paid.
+but their node and wallet evidence can differ.
 
 Supply-chain scanners (Socket, etc.) also flag `xmr-pay` for "network access"
-and "URL strings": both are by design — verification fetches from Monero nodes,
-and the default node list is literally a list of URLs. Neither is a finding.
+and "URL strings": both are by design: verification fetches from Monero nodes,
+and the default node list is literally a list of URLs. Assess whether the destination and data sent match the intended integration.
 
 ## Verifying releases
 

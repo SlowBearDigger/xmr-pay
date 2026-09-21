@@ -1,4 +1,4 @@
-// Verify incoming payments with a private view key.
+// Verify buyer payment proofs against configured nodes without a merchant key.
 const http = require('http');
 let _verifyPayment;
 function defaultVerify(opts) { if (!_verifyPayment) _verifyPayment = require('../src/verify').verifyPayment; return _verifyPayment(opts); }

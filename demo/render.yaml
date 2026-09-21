@@ -1,4 +1,4 @@
-# Render Blueprint — point a new Blueprint at this folder to deploy the demo.
+# Render Blueprint: point a new Blueprint at this folder to deploy the demo.
 services:
   - type: web
     name: xmr-pay-demo

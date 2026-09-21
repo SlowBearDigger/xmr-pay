@@ -1,17 +1,18 @@
-# xmr-pay — HTTP API
+# xmr-pay: HTTP API
 
-Two small HTTP surfaces ship with the library, so you can accept Monero from **any**
-stack (PHP, Python, Go, Ruby, a static site + a function) — not just Node:
+The library includes two HTTP services that a merchant backend can call:
 
-- **The agent** (`npx xmr-pay`, i.e. `examples/scanner-agent.js`) — watch mode: it holds
+- **The agent** (`npx xmr-pay`, i.e. `examples/scanner-agent.js`): watch mode: it holds
   your **view key**, scans the chain, and exposes a tiny order API. Run it on a box you
   control (bind to localhost / a private network).
-- **The keyless verifier** (`examples/verify-keyless.js`) — proof mode: a **stateless,
+- **The keyless verifier** (`examples/verify-keyless.js`): proof mode: a **stateless,
   keyless** endpoint that verifies a buyer's tx proof. Holds no keys and no order state;
   one instance can serve many stores, and anyone can run their own.
 
-All requests/responses are JSON. Amounts are XMR decimal strings unless noted; the
-authoritative integer is piconero (1 XMR = 1e12 piconero).
+Requests and ordinary responses are JSON; the stream endpoint uses Server-Sent Events.
+Expected amounts and shortfalls use decimal strings. `receivedXmr`, `pendingXmr`,
+`lockedXmr` and webhook `received_xmr` are display numbers. Accounting comparisons
+use integer piconero (1 XMR = 1e12 piconero).
 
 ---
 
@@ -26,7 +27,11 @@ Keep this token on the merchant backend; expose only buyer-specific proxy routes
 Create an order and get a fresh per-order subaddress to show the buyer.
 
 Request: `{ "amount": "0.05", "id": "order-123", "label": "My Store #123" }`
-(`amount` required; `id` optional — yours; `label` optional.)
+Send `Content-Type: application/json`; the body limit is 16 KiB. `amount` must be
+positive; a decimal string preserves precision. Optional `id` is a nonempty string
+(up to 2048 characters) or a safe nonnegative integer, normalized to a string by HTTP.
+Omitting it generates a random ID. Optional `label` is a string up to 256 characters.
+URL-encode the ID when placing it in a request path.
 
 Response `200`:
 ```json
@@ -35,14 +40,14 @@ Response `200`:
 Errors: `400` (malformed JSON or object), `401` (bad token), `409` (invalid or duplicate order), `413` (body too large), `415` (JSON content type required), `503` (persistence unavailable).
 
 ### `GET /order/:id`
-Poll an order's status (reads cached state — the background poller keeps it fresh; never
+Poll an order's status (reads cached state: the background poller keeps it fresh; never
 triggers a per-request sync).
 
 Response `200`:
 ```json
 {
   "id": "order-123", "paid": false, "status": "mempool",
-  "amount": "0.05", "receivedXmr": "0.05", "lockedXmr": "0",
+  "amount": "0.05", "receivedXmr": 0, "pendingXmr": 0.05, "lockedXmr": 0,
   "shortfallXmr": "0", "overpaid": false, "overpaidXmr": "0",
   "confirmations": 0, "minConfirmations": 1,
   "tipHeight": 3211950, "walletHeight": 3211950, "syncing": false,
@@ -50,12 +55,12 @@ Response `200`:
 }
 ```
 `status` ∈ `pending | mempool | unconfirmed | partial | underpaid | locked | paid`.
-`syncing: true` means the scanner is behind the tip (show "node catching up", not a bare
+`syncing: true` means either height is unavailable or the scanner is behind the tip (show "node catching up", not a bare
 "pending"). `404` if the id is unknown.
 
 ### `GET /order/:id/stream`  (Server-Sent Events)
-A push channel — each event is the same JSON snapshot as `GET /order/:id`, emitted the
-instant the poller folds a change (the buyer's page updates in seconds, no polling lag).
+A push channel: each event is the same JSON snapshot as `GET /order/:id`, emitted the
+time the poller updates an order. Detection still depends on node and scan latency.
 `Content-Type: text/event-stream`; the server sends an initial snapshot on connect and a
 `: ping` heartbeat. Send `AGENT_TOKEN` in the `Authorization` header.
 Browser `EventSource` cannot set that header, so use a restricted store proxy that adds
@@ -64,7 +69,8 @@ fallback if a proxy buffers SSE.
 
 ### `GET /receipt/:id`
 The signed, self-contained receipt for a paid order (download/verify offline; also
-verifiable on-chain via its embedded tx proofs). `409` until the order is paid; token-gated.
+verifiable on-chain when tx proofs are present). `409` while unpaid or while a receipt
+is unavailable, including a signing failure; `404` for an unknown or retired order.
 
 ### `GET /healthz`
 ```json
@@ -80,20 +86,23 @@ When an order settles, the agent POSTs a signed `order.paid` to your `FULFILL_WE
 verify it constant-time (`xmr-pay/webhook` → `verifySignature`). Body:
 ```json
 { "event": "order.paid", "order_id": "order-123", "amount_xmr": "0.05",
-  "received_xmr": "0.05", "overpaid": false, "overpaid_xmr": "0",
+  "received_xmr": 0.05, "overpaid": false, "overpaid_xmr": "0",
   "address": "8…", "txids": ["…"], "confirmations": 1,
-  "network": "mainnet", "receipt": { … }, "event_ts": 1750000000000 }
+  "network": "mainnet", "event_ts": 1750000000000 }
 ```
-Idempotent on `order_id`; `event_ts` (ms) is a replay-window guard.
+An optional `receipt` field contains the signed envelope returned by `/receipt/:id`.
+The receiver must process each order idempotently; delivery can repeat. `event_ts`
+(milliseconds) is a replay-window guard, not a unique payment identifier. Redirects
+are rejected. See [EVENTS.md](EVENTS.md) for delivery and settlement semantics.
 
 ---
 
 ## The keyless verifier API
 
-`examples/verify-keyless.js` — run standalone (`node verify-keyless.js`, default
+`examples/verify-keyless.js`: run standalone (`node examples/verify-keyless.js`, default
 `http://127.0.0.1:8795`) or deploy `createVerifyHandler()` as a serverless function.
 **Stateless and keyless:** it verifies one proof against **its own** configured nodes and
-reports the verdict. It is **not** the replay authority — your store dedups the returned
+reports the verdict. It is **not** the replay authority: your store dedups the returned
 `txid`, and binds `address`+`amount` from your own order before calling.
 
 ### `POST /verify`
@@ -108,21 +117,23 @@ lowered.
 
 Response `200`:
 ```json
-{ "paid": true, "status": "ok", "reason": "", "receivedXmr": 0.05,
+{ "paid": true, "status": "paid", "reason": "verified on-chain", "receivedXmr": 0.05,
   "confirmations": 3, "overpaid": false, "overpaidXmr": "0",
   "txid": "<lowercased>", "nodesAgreed": 2 }
 ```
-`status` ∈ `ok | underpaid | unconfirmed | mempool | no-funds | locked | invalid |
-node-disagreement`. `400` (bad input — never reaches a node), `401` (token), `429`
-(rate-limited), `502` (`status: node-error`, retryable).
+`status` ∈ `paid | underpaid | unconfirmed | mempool | no-funds | locked | invalid |
+node-disagreement | node-error`. Normal verifier results, including `node-error`,
+use HTTP `200`; inspect `paid` and `status`. Handler validation returns `400`,
+a bad token returns `401`, rate limiting returns `429`, and a thrown verification
+error returns `502` with `status: node-error`.
 
 ### `GET /healthz`
 `{ "ok": true, "keyless": true, "network": "mainnet", "nodes": 2 }`
 
 ---
 
-## Using it without Node
-You don't need Node in your app — your app just makes HTTP calls to one of these. The
-WordPress plugin, for example, talks to the agent over HTTP in agent mode, and to a keyless
-verifier in proof mode. Any backend that can POST JSON can integrate the same way. (The
-WordPress plugin can also skip both and verify in pure PHP — see that project.)
+## Using it from another backend
+
+Any backend can call these endpoints. WooCommerce uses the agent API only in agent
+mode; its native watch and proof modes verify in PHP with the merchant's view key.
+Its native proof mode does not call the keyless JavaScript verifier.

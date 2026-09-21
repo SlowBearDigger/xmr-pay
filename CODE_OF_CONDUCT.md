@@ -3,7 +3,7 @@
 Be decent. This is a small project run by people in their spare time.
 
 - Assume good faith. Critique code, not people.
-- No harassment, slurs, or personal attacks — in issues, PRs, or anywhere the
+- No harassment, slurs, or personal attacks: in issues, PRs, or anywhere the
   project lives.
 - Security reports go through [SECURITY.md](SECURITY.md), not public issues.
 - Spam, scams, and "is this a scam?" trolling get removed.

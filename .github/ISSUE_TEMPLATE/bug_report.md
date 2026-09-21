@@ -10,7 +10,7 @@ labels: bug
 
 **How to reproduce**
 Minimal steps or code. For verify issues include the status/reason returned
-(never post real mainnet txids/keys — use stagenet).
+(never post real mainnet txids/keys: use stagenet).
 
 **Environment**
 - xmr-pay version:
