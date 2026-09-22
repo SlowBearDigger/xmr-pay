@@ -87,5 +87,10 @@
   "devDependencies": {
     "@stryker-mutator/core": "^9.6.1",
     "fast-check": "^4.8.0"
+  },
+  "overrides": {
+    "typed-rest-client": {
+      "qs": "^6.16.0"
+    }
   }
 }
