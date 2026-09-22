@@ -25,7 +25,7 @@ async function handleVerify(body) {
     const hits = (orderHits.get(order_id) || []).filter(t => now - t < WINDOW_MS);
     hits.push(now);
     orderHits.set(order_id, hits);
-    if (hits.length > ORDER_MAX) return { code: 429, body: { error: 'demo is busy — try again in a few minutes' } };
+    if (hits.length > ORDER_MAX) return { code: 429, body: { error: 'demo is busy: try again in a few minutes' } };
 
     const result = await verifyPayment({
         txid, proof,

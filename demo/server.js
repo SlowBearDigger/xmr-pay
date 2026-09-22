@@ -29,7 +29,7 @@ http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && url === '/api/verify-payment') {
         const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
-        if (rateLimited(ip)) { res.writeHead(429, { 'Content-Type': 'application/json' }); return res.end('{"error":"rate limited — give it a moment"}'); }
+        if (rateLimited(ip)) { res.writeHead(429, { 'Content-Type': 'application/json' }); return res.end('{"error":"rate limited: give it a moment"}'); }
         let raw = '';
         req.on('data', c => { raw += c; if (raw.length > 65536) req.destroy(); });
         req.on('end', async () => {

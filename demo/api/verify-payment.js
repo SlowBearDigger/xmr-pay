@@ -10,7 +10,7 @@ module.exports = async function handler(req, res) {
     try {
         const { code, body } = await handleVerify(req.body || {});
         return res.status(code).json(body);
-    } catch (e) {
+    } catch {
         return res.status(502).json({ error: 'verification failed' });
     }
 };
