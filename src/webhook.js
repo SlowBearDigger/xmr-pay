@@ -1,16 +1,10 @@
-// outbound fulfillment webhooks — emitted by YOUR verify endpoint, signed with
-// YOUR secret. there is no central server in this design, so "webhooks" simply
-// means: the moment verifyPayment returns paid, your code notifies whatever
-// needs to know (shop platform, shipping, Discord, Zapier). this helper does
-// the signed POST + retries so that's one line.
-
+// Deliver signed payment notifications with bounded retries.
 const crypto = require('crypto');
 
 function signPayload(body, secret) {
     return 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
-// receiver side: constant-time check of the signature header
 function verifySignature(body, secret, header) {
     const expected = signPayload(body, secret);
     const a = Buffer.from(expected), b = Buffer.from(String(header || ''));
@@ -18,10 +12,7 @@ function verifySignature(body, secret, header) {
 }
 
 async function sendWebhook(url, payload, { secret = null, attempts = 3, timeoutMs = 8000 } = {}) {
-    // stamp the event time INSIDE the signed body, so a receiver can reject a
-    // replayed delivery (check `event_ts` is recent after verifying the signature).
-    // it can't be forged without the secret. defense in depth — the real guard is
-    // idempotency on order_id. caller-supplied event_ts is preserved.
+
     const stamped = (payload && payload.event_ts != null) ? payload : { ...payload, event_ts: Date.now() };
     const body = JSON.stringify(stamped);
     const headers = { 'Content-Type': 'application/json' };
@@ -29,7 +20,7 @@ async function sendWebhook(url, payload, { secret = null, attempts = 3, timeoutM
     let last = { delivered: false };
     for (let i = 1; i <= attempts; i++) {
         try {
-            const r = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutMs) });
+            const r = await fetch(url, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
             if (r.ok) return { delivered: true, status: r.status, attempt: i };
             last = { delivered: false, status: r.status, attempt: i };
         } catch (e) {

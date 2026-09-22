@@ -1,10 +1,4 @@
-/*
- * xmr-pay portable checkout — page shell logic. Vanilla, zero dependencies.
- * Reads the order from the URL (fragment preferred — it never reaches a server), wires the
- * <xmr-pay> widget (which does the QR, status poll / SSE, top-up and receipt), and drives an
- * advisory price-lock countdown. The widget and the chain are the source of truth; the
- * countdown is cosmetic, so a late top-up is never lost.
- */
+// Render and update the merchant checkout.
 (function () {
   'use strict';
 
@@ -16,19 +10,15 @@
   var address = (get('address') || '').trim();
   var config = (get('config') || '').trim();
 
-  // a valid payable target is EITHER a signed config envelope or a 95/106-char Monero
-  // address (mainnet 4/8, stagenet 5/7, integrated 4...). keep the check loose; the widget
-  // does the strict validation + the signed-config signature check.
   var addressLooksValid = /^[1-9A-HJ-NP-Za-km-z]{95,106}$/.test(address);
   if (!config && !addressLooksValid) {
     mount.innerHTML = '<p class="xp-broken"><b>This payment link looks incomplete.</b> Please go back and open the full link your merchant sent you, or ask them for a new one.</p>';
     document.getElementById('xp-eyebrow').textContent = 'Monero · link error';
     var foot = document.querySelector('.xp-foot');
-    if (foot) foot.style.display = 'none';   // the trust copy talks about the QR; no QR here
+    if (foot) foot.style.display = 'none';
     return;
   }
 
-  // ---- header ----
   var label = get('label');
   var amount = get('amount');
   if (label) { setText('xp-label', label); document.title = label + ' · Monero'; }
@@ -38,11 +28,10 @@
     amtEl.hidden = false;
   }
 
-  // ---- build the widget, wire every attribute we were given ----
   var el = document.createElement('xmr-pay');
   if (config) el.setAttribute('config', config);
   else el.setAttribute('address', address);
-  // [url-param -> widget attribute]
+
   var map = [
     ['amount', 'amount'], ['label', 'label'], ['order', 'order'],
     ['verify-url', 'verify-url'], ['verify', 'verify-url'],
@@ -58,8 +47,6 @@
   }
   mount.appendChild(el);
 
-  // ---- advisory price-lock countdown ----
-  // `expires` (unix SECONDS) wins; else `window` MINUTES from page load (default 30).
   var paid = false;
   var expiresMs = null;
   var expires = parseInt(get('expires'), 10);
@@ -80,7 +67,7 @@
     var left = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000));
     if (left <= 0) {
       timer.classList.add('elapsed');
-      timer.lastElementChild.innerHTML = 'Rate window elapsed — the address still works; reload for a current rate';
+      timer.lastElementChild.innerHTML = 'Rate window elapsed: the address still works; reload for a current rate';
       clearInterval(iv);
       return;
     }
@@ -90,7 +77,6 @@
   tick();
   var iv = setInterval(tick, 1000);
 
-  // ---- stop the countdown once the widget reports a confirmed payment ----
   document.addEventListener('xmr-pay:paid', function () {
     paid = true;
     clearInterval(iv);

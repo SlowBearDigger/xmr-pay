@@ -1,139 +1,85 @@
-# Payment agent — accept Monero, auto-complete, no daemon
+# Payment agent
 
-The **payment agent** is the watch-mode side of xmr-pay: a small, long-running
-service the merchant runs on their own box. It builds a **view-only** wallet from
-the merchant's address + private view key, hands out a **fresh subaddress per
-order**, scans the chain, **sums payments**, and fires a **signed `order.paid`
-webhook** the moment an order settles.
-
-No `monero-wallet-rpc`. No custodian. The view key **never leaves the merchant's
-process**, and it **cannot spend** (view-only). This is "watch mode" — the buyer
-submits nothing; the merchant just watches their own subaddresses.
-
-> Prefer zero infrastructure? Use **proof mode** instead (a stateless verify
-> endpoint, see the main README) — the buyer pastes a payment proof and nothing
-> runs 24/7. The agent is for merchants who want automatic detection and top-ups.
-
----
-
-## What this solves
-
-Monero adoption stalls on two sides: it's hard for **merchants** to accept, and
-easy for **customers** to get wrong. Here's what each piece fixes.
-
-### For merchants
-
-| Problem | How the agent solves it |
-|---|---|
-| Accepting Monero usually means running a node **and** `monero-wallet-rpc`, or trusting a custodian | One Node process. No wallet-rpc daemon. Funds go straight to your address — **non-custodial**. |
-| Handing your **view key** to a payment processor leaks every sale and is a trust risk | The view key stays **in your process**, bound to localhost. It's **view-only** — the agent refuses to start if a spend key is present. |
-| Underpayments and abandoned carts create support tickets | Underpayment is detected and **summed**: the buyer tops up the difference and the order **auto-completes**. No manual reconciliation. |
-| Knowing exactly **when to ship** | A **signed `order.paid` webhook** fires **exactly once**, on the pending→paid transition. Verify the HMAC, release the goods. |
-| Scanning the chain is **slow** | A fresh scanner starts at the **current tip** (a payment processor never needs history) and only scans **forward**. The WASM cold start is paid **once** at boot; per-order checks are ~0.5s. |
-| **Fake / time-locked** payments that look paid but can't be spent | Outputs locked by `unlock_time` (or still in the ~10-block maturation window) **never count as paid** until spendable. |
-| **Replay / cross-order** confusion | Every order gets its **own subaddress**, so a payment is unambiguously attributed to exactly one order. |
-
-### For customers (buyers)
-
-| Problem | How it's solved |
-|---|---|
-| Fear of typing the **wrong amount** | The QR and the "open in wallet" link **prefill the exact amount** (`tx_amount`), in a form **every wallet parses** (Feather, GUI, CLI, Cake, Monerujo, Stack — mobile and desktop, Win/Mac/Linux). |
-| **Underpaid** and stuck, not knowing what to do | A clear message — *"Detected 0.1 XMR — send 0.2 more to complete"* — plus a **QR for exactly the missing amount**. Scan, pay the difference, done. The math is **piconero-exact** (no float drift). |
-| Confusing "it didn't work" errors | **Instant, specific** feedback before anything is submitted: *"that transaction ID should be 64 characters"*, *"that doesn't look like a payment proof — paste the tx key or proof block"*. |
-| In watch mode, **doing extra work** (copying proofs) | Nothing to submit. The buyer just pays the address/QR; the merchant's agent detects it. |
-| Trusting the checkout page | Non-custodial — **funds go directly to the merchant**. Optional **signed config + fingerprint** catches an address swap even on a compromised page. The browser **decides nothing**; the merchant's server is the source of truth. |
-
----
-
-## How it works
-
-```
-merchant's box (the view key never leaves here)
-┌───────────────────────────────────────────────────────────────┐
-│  scanner-agent.js                                              │
-│   ├─ view-only wallet  ←  primary address + private view key   │
-│   │     (cannot spend — refuses to start otherwise)            │
-│   ├─ per order:  newSubaddress()  →  unique address + birthday │
-│   ├─ poller:     sync forward, SUM transfers, exact shortfall  │
-│   └─ on paid:    signed order.paid webhook  (fires once)       │
-└───────────────────────────────────────────────────────────────┘
-        ▲  POST /order {amount}          │  order.paid (HMAC-signed)
-        │  GET  /order/:id               ▼
-   your shop backend  ───────────────▶  your fulfillment
-```
-
-The buyer is shown the order's subaddress + amount (QR). They pay — in one
-transaction or several. The agent sums everything that arrives to that
-subaddress; when the confirmed, spendable total covers the amount, the order is
-`paid` and the webhook fires.
-
----
+The agent is a long-running Node service that scans a view-only wallet, assigns a subaddress to each order, sums payments and sends signed `order.paid` notifications. It needs a Monero node and `monero-ts`, but no `monero-wallet-rpc` process.
 
 ## Quickstart
 
-Needs Node and `monero-ts` (the only non-core dependency — `npm i monero-ts`).
-`monero-ts` pins two old transitive deps with advisories; patch them with npm
-`overrides` in your deployment's `package.json` (recipe in
-[SECURITY.md](../SECURITY.md#dependencies) — `npm audit` then reports zero).
+Use Node 20 or later. From an installed release, `npx xmr-pay` runs the setup wizard and starts the agent. `npx xmr-pay start` reuses that configuration. The CLI persists its wallet, orders and signing key under `XMR_PAY_DIR`.
+
+To run the source example directly, install `monero-ts` with the [documented dependency overrides](../SECURITY.md#dependencies), then set the following values. Replace both key placeholders with matching stagenet credentials and create a private data directory before starting.
 
 ```bash
-XMR_PRIMARY_ADDRESS="4your_primary_address…" \
+mkdir -p xmr-pay-data
+chmod 700 xmr-pay-data
+export AGENT_TOKEN="$(openssl rand -hex 32)"
+export FULFILL_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+XMR_PRIMARY_ADDRESS="5your_stagenet_primary_address" \
 XMR_VIEW_KEY="your_private_view_key" \
 XMR_NETWORK=stagenet \
 XMR_NODES="http://node.monerodevs.org:38089" \
-FULFILL_WEBHOOK_URL="https://your-shop/internal/xmr-paid" \
-FULFILL_WEBHOOK_SECRET="whsec_…" \
+XMR_WALLET_PATH="./xmr-pay-data/wallet" \
+XMR_ORDERS_FILE="./xmr-pay-data/orders.json" \
+XMR_RECEIPT_KEY="./xmr-pay-data/receipt-key.pem" \
+FULFILL_WEBHOOK_URL="https://your-shop.example/internal/xmr-paid" \
 node examples/scanner-agent.js
-# → payment agent on http://127.0.0.1:8788
 ```
 
-Create an order from your shop backend, show the buyer the address, poll for status:
+Keep the generated secrets on the merchant backend. Configure the webhook receiver with the same webhook secret.
 
 ```bash
-# create
-curl -s -XPOST localhost:8788/order -d '{"id":"ord_42","amount":"0.05"}'
-# → {"id":"ord_42","address":"8B…","amount":"0.05","status":"pending","birthdayHeight":2140925}
+curl -s http://127.0.0.1:8788/order \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"ord_42","amount":"0.05"}'
 
-# check (your backend polls, or rely on the webhook)
-curl -s localhost:8788/order/ord_42
-# → {"paid":false,"status":"partial","receivedXmr":0.02,"shortfallXmr":"0.03",…}
-# …buyer tops up…
-# → {"paid":true,"status":"paid","receivedXmr":0.05,"shortfallXmr":"0",…}
+curl -s http://127.0.0.1:8788/order/ord_42 \
+  -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
-When `ord_42` settles, the agent POSTs a signed `order.paid` to your webhook —
-verify it with `verifySignature(rawBody, secret, req.headers['x-xmr-pay-signature'])`
-(`xmr-pay/webhook`) and fulfill.
+Show the buyer the returned subaddress and amount. Your backend checks status or receives the webhook; it must not expose the agent token to the browser. Use unguessable order IDs or an authenticated store endpoint for buyer status.
 
 ### Configuration
 
+The table lists direct-example defaults. The CLI wizard writes `expiryHours: 24`
+and `paidRetentionHours: 168` into its private `config.json`, which override the
+two corresponding environment settings on CLI start. Set either config value to
+`0` to disable that policy. Review an existing configuration before upgrading.
+The current CLI maps a saved `minConfirmations: 0` to `1`; the direct HTTP example
+accepts an explicit `0`.
+
 | Variable | Required | Default | What it is |
 |---|---|---|---|
-| `XMR_PRIMARY_ADDRESS` | ✅ | — | your wallet's primary address |
-| `XMR_VIEW_KEY` | ✅ | — | your **private view key** (view-only; cannot spend) |
+| `XMR_PRIMARY_ADDRESS` | yes | none | your wallet's primary address |
+| `XMR_VIEW_KEY` | yes | none | your **private view key** (view-only; cannot spend) |
 | `XMR_NODES_JSON` | one of these | - | preferred for protected nodes; JSON array with one independent row per node |
 | `XMR_NODES` | one of these | - | legacy unprotected Monero node URLs, comma-separated; your own first |
 | `XMR_NETWORK` | | `mainnet` | `mainnet` · `stagenet` · `testnet` |
-| `XMR_RESTORE_HEIGHT` | | tip | omit to start at "now" (instant first sync); set it only to find older payments |
+| `XMR_RESTORE_HEIGHT` | | tip | new wallets start at the current tip; set an earlier height for recovery |
 | `XMR_WALLET_PATH` | | in-memory | persist the wallet so restarts skip re-scanning |
 | `XMR_MIN_CONFIRMATIONS` | | `1` | raise for high-value orders (reorg safety) |
 | `XMR_TOLERANCE_XMR` | | `0` | accept a buyer who lands short by up to this (absorbs dust/fee/rounding so they aren't stuck "underpaid"). `0` = exact; never allowed to reach the price |
-| `XMR_EXPIRY_HOURS` | | `0` | drop unpaid orders after N hours (bounds per-tick work + memory; `0` = never). A late payment still lands on-chain — it just won't auto-complete. |
-| `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order|/receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
-| `POLL_MS` | | `15000` | how often the poller re-checks pending orders |
-| `FULFILL_WEBHOOK_URL` / `_SECRET` | | — | where + how to sign the `order.paid` webhook |
-| `AGENT_TOKEN` | | — | optional `Bearer` token required on `POST /order` |
-| `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost — it holds your view key |
-| `XMR_SUBADDRESS_POOL` | | `8` | how many fresh subaddresses to pre-derive so `POST /order` never blocks on the wallet |
+| `XMR_EXPIRY_HOURS` | | `0` | drop unpaid orders after N hours (bounds per-tick work + memory; `0` = never). A late payment still lands on-chain: it just won't auto-complete. |
+| `XMR_PAID_RETENTION_HOURS` | | `0` | retire SETTLED orders after N hours (`0` = keep forever). The store/webhook is the source of truth; without this, paid orders accumulate for the agent's lifetime. `GET /order/:id` and `GET /receipt/:id` 404s after retirement, so set it well past your buyers' poll window. |
+| `POLL_MS` | | `15000` | idle polling interval in milliseconds |
+| `POLL_ACTIVE_MS` | | `3000` | interval while a checkout is active or a status stream is connected |
+| `XMR_CHECKOUT_WINDOW_MIN` | | `30` | how long a new unpaid order keeps active polling enabled |
+| `FULFILL_WEBHOOK_URL` / `_SECRET` | when using callbacks | none | callback destination and shared signing secret; set both |
+| `AGENT_TOKEN` | yes | none | `Bearer` token for order, receipt, and health endpoints; required on every bind address |
+| `BIND` / `PORT` | | `127.0.0.1` / `8788` | keep it on localhost; every bind requires `AGENT_TOKEN` |
+| `XMR_SUBADDRESS_POOL` | | `8` | how many fresh subaddresses to pre-derive to reduce allocation latency; creation still saves the wallet before returning |
 | `XMR_SYNC_TIMEOUT_MS` | | `120000` | per-sync and protected-node RPC deadline; on a stall the agent fails over to the next node |
-| `XMR_SYNC_GAP` | | `2` | lookahead gap when scanning subaddresses |
+| `XMR_SYNC_GAP` | | `2` | wallet-to-daemon height gap allowed before status reports syncing |
 | `XMR_WEBHOOK_SWEEP_MS` | | `30000` | how often to retry undelivered `order.paid` webhooks (durable redelivery) |
-| `XMR_MERCHANT_NAME` | | — | shown on signed receipts |
+| `XMR_MERCHANT_NAME` | | none | shown on signed receipts |
 | `XMR_RECEIPT_KEY` | | auto | path to the receipt-signing key (PEM); generated + persisted if absent |
-| `XMR_RECEIPT_TXPROOF` | | off | also embed a buyer `tx_proof` per payment so receipts verify against Monero with no merchant trust |
-| `XMR_WALLET_PASSWORD` | | — | encrypts the persisted wallet file at `XMR_WALLET_PATH` |
-| `XMR_ORDERS_FILE` | | in `XMR_PAY_DIR` | path to the orders ledger (JSON) |
+| `XMR_RECEIPT_TXPROOF` | | on | attempt to embed receipt tx proofs; set `0` to disable. Proof generation can fail independently of settlement. |
+| `XMR_WALLET_PASSWORD` | | none | encrypts the persisted wallet file at `XMR_WALLET_PATH` |
+| `XMR_ORDERS_FILE` | | `./orders.json` | direct-example ledger path; the CLI sets a path inside its data directory |
 | `XMR_PAY_DIR` | | `./xmr-pay-data` | data dir for the `npx xmr-pay` CLI (config, wallet, orders, keys) |
+
+Set `AGENT_TOKEN` before starting the agent, including when it binds to `127.0.0.1`. Expose only the routes buyers need; never proxy the entire agent API.
+
+Keep `XMR_PAY_DIR` outside the web root on a filesystem that enforces file ownership. On Unix, the CLI sets the data directory to mode `700` and its config to `600` on setup and start.
 
 #### Protected nodes and failover
 
@@ -142,7 +88,7 @@ Each node has its own authentication settings, so failover never reuses one
 node's credentials with another node.
 
 ```bash
-XMR_NODES_JSON='[
+export XMR_NODES_JSON='[
   {
     "url": "https://monero-primary.example:18081",
     "auth": "digest",
@@ -177,94 +123,33 @@ permissions. It probes every configured node, reports unavailable rows as
 warnings, and uses the first reachable height in configured order. Keep that
 directory private and out of source control.
 
----
 
-## API
+## Settlement and delivery
 
-- `POST /order` `{amount, id?, label?}` → `{id, address, amount, status, birthdayHeight}` — derives a fresh per-order subaddress. (Requires `Authorization: Bearer <AGENT_TOKEN>` if set.)
-- `GET /order/:id` → `{paid, status, amount, receivedXmr, lockedXmr, shortfallXmr, confirmations, txids}` — live on-chain status.
-- `GET /healthz` → `{ok, network, node, viewOnly, orders}`.
+The scanner checks wallet capability with `isViewOnly()`. The HTTP agent refuses to start unless that check returns true. The private view key remains on the merchant's system; node passwords are sent only to their configured nodes for authentication.
 
-`status` is one of: `pending` · `partial` · `mempool` · `locked` · `paid`.
-`shortfallXmr` is the **exact** amount still owed (piconero-precise; counts funds
-already on-chain, including those still maturing, so a top-up prompt never asks
-for too much).
+A payment counts when its amount and confirmation policy pass and any explicit `unlock_time` has elapsed. Ordinary wallet maturation is not an extra ten-confirmation requirement: `XMR_MIN_CONFIRMATIONS` controls acceptance. A paid order remains paid even if a later reorganisation removes the payment. Choose confirmations for the value being delivered.
 
----
+`order.paid` delivery is retried, so receivers must verify the HMAC and process duplicates idempotently. The library callback is not an exactly-once delivery guarantee. Keep one agent writer per wallet and ledger.
 
-## Trust & security
+Order status is cached between scans. New checkouts and connected streams use the active polling interval; idle periods use `POLL_MS`. Node delays and wallet catch-up affect detection time.
 
-- **View-only, always.** The agent reads `getPrivateSpendKey()` and **refuses to
-  start** if a spendable key is present. It can watch; it can never move funds.
-- **The view key never leaves your process.** Run the agent on your own
-  infrastructure, bound to `127.0.0.1` (the default). Put your shop backend in
-  front; don't expose `/order` to the public internet.
-- **Per-order subaddresses** isolate every order — no cross-order leakage, and a
-  payment can only ever settle the order it was sent to.
-- **The webhook is the trigger, signed.** Fulfill on `order.paid` after verifying
-  the HMAC — never on anything client-side.
-- **Privacy:** a node you query learns the subaddresses you scan and your IP/
-  timing. Run your own node (list it first in `XMR_NODES`) or egress over Tor to
-  close that.
+## Persistence and expiry
 
----
+The HTTP example persists orders to its JSON ledger; the library `createPaymentAgent()` defaults to memory. Persist the wallet as well as orders for restart recovery. See [STORAGE.md](STORAGE.md).
 
-## Proof mode or the agent — which do I want?
+Expiry and paid retention default to disabled in the direct HTTP example. The CLI wizard configures 24-hour expiry and 168-hour paid retention. Expiry removes only orders with a successful check and no detected funds; it does not return a payment or stop the address receiving funds. Retention preserves paid orders with an undelivered webhook. Retired orders and receipts return `404`, so keep records in the store for accounting and support.
 
-| | **Proof mode** (verify endpoint) | **Agent** (watch mode) |
-|---|---|---|
-| Infrastructure | a stateless function, runs on demand | a long-running process you host |
-| Buyer effort | pastes a tx proof | nothing — just pays |
-| View key | not needed | yours, in-process (view-only) |
-| Partial / top-up auto-complete | manual (single-tx proofs) | **automatic** (sums transfers) |
-| Best for | tips, a single product, lowest infra | a real store, installments, hands-off |
+## Node trust and network access
 
-They share the same exact-math core (`summarizeTransfers`, piconero shortfalls),
-so a payment counts identically either way. Many shops run the agent and keep the
-proof endpoint as a dispute path.
+The JavaScript watch scanner uses one active node and switches nodes on failure. This is failover, not independent quorum verification. Nodes see the agent's network address, request timing and requested chain data; address matching happens locally. Run trusted nodes and protect the host that holds the view key.
 
----
+Every HTTP route requires the agent token, including health and receipts. Bind to loopback and proxy only the buyer-specific routes your store needs. The [HTTP API](API.md) lists request limits, response fields and error codes; [EVENTS.md](EVENTS.md) describes callback handling.
 
-## Performance & sync
+## Embed the library
 
-- **Start at the tip.** A fresh scanner reads the current chain height and starts
-  there — **0 history blocks scanned**. It only ever scans forward (~1 block per
-  couple of minutes), so detection is near-instant after the first sync.
-- **Cold start once.** Building the monero-ts WASM wallet + connecting is a
-  one-time ~tens-of-seconds cost at boot — **not per order**. Keep the agent
-  running; warm per-order checks are ~0.5s.
-- **At scale**, a self-hosted [`monero-lws`](https://github.com/vtnerd/monero-lws)
-  light-wallet server (same trust boundary — your view key, your box) moves
-  scanning off the client entirely. The agent's transport is swappable; this is a
-  future option, not required.
-
----
-
-## Honest notes
-
-- **Order state is in memory** in the reference agent. For production, persist
-  orders (id → subaddress index + amount) in your own DB and re-register them on
-  restart (`createOrder({ id, amount, index })` binds an existing subaddress); the
-  wallet itself persists with `XMR_WALLET_PATH` so scanning resumes fast.
-- **Maturation vs. time-locks.** Every confirmed output is briefly unspendable
-  during Monero's ~10-block maturation — that's benign, so a confirmed payment
-  counts toward `paid` at `XMR_MIN_CONFIRMATIONS`, the same as proof mode and the
-  wallet-rpc watcher. Only an **explicit** `unlock_time` (the time-lock scam)
-  holds an order at `locked` (with `shortfallXmr: "0"` — the buyer owes nothing).
-- **Reorgs are final once fulfilled.** When `onPaid` fires, the poller treats the
-  order as settled and stops re-checking it — a later reorg will **not** un-settle
-  it on its own. So don't ship high-value orders at 1 conf: scale
-  `XMR_MIN_CONFIRMATIONS` with value (e.g. 10), and re-`check()` manually before an
-  expensive fulfillment if you want to confirm the tx is still buried.
-- **Run ONE agent per view key.** `onPaid` is exactly-once *per process*. For high
-  availability, run a single instance — or make your webhook receiver idempotent
-  on `order_id` (and/or use shared state) so two instances can never double-fulfill.
-
----
-
-## Build on it
-
-The agent is two small, reusable pieces — embed them in your own service:
+Create a scanner and order manager inside your service. This example uses an
+in-memory order store; add durable storage before using it for fulfillment:
 
 ```js
 const { createScanner } = require('xmr-pay/scanner');
@@ -277,5 +162,3 @@ agent.start();
 const order = await agent.createOrder({ id: 'ord_42', amount: '0.05' });  // → { address, … }
 const status = await agent.check('ord_42');                               // live: { paid, shortfallXmr, … }
 ```
-
-A [GoXMR](https://goxmr.click) project · MIT.

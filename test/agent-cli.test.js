@@ -2,6 +2,10 @@
 //   node test/agent-cli.test.js
 
 const { applyConfig, hiddenAnswer, npmInstallEnv } = require('../bin/agent.js');
+const { spawnSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { (cond ? pass++ : fail++); console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? '  — ' + extra : ''}`); };
@@ -64,6 +68,53 @@ const installChild = typeof npmInstallEnv === 'function' ? npmInstallEnv(install
 ok('npm install child keeps ordinary process settings', installChild.PATH === '/usr/bin' && installChild.npm_config_cache === '/tmp/cache');
 ok('npm install child receives no payment or node secrets',
     !Object.keys(installChild).some(key => ['XMR_VIEW_KEY', 'XMR_NODES_JSON', 'XMR_NODES', 'XMR_WALLET_PASSWORD', 'FULFILL_WEBHOOK_SECRET', 'AGENT_TOKEN'].includes(key)));
+
+const exposed = spawnSync(process.execPath, [path.join(__dirname, '../examples/scanner-agent.js')], {
+    env: { XMR_NODES: 'http://127.0.0.1:18081', BIND: '0.0.0.0' }, encoding: 'utf8',
+});
+ok('agent rejects public bind without a token', exposed.status === 1 && exposed.stderr.includes('AGENT_TOKEN is required'));
+
+const local = spawnSync(process.execPath, [path.join(__dirname, '../examples/scanner-agent.js')], {
+    env: { XMR_NODES: 'http://127.0.0.1:18081' }, encoding: 'utf8',
+});
+ok('agent rejects loopback without a token', local.status === 1 && local.stderr.includes('AGENT_TOKEN is required'));
+
+if (process.platform !== 'win32') {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xmr-agent-perms-'));
+    try {
+        const fresh = path.join(root, 'fresh');
+        spawnSync(process.execPath, [path.join(__dirname, '../bin/agent.js'), 'start'], {
+            env: { PATH: process.env.PATH || '', XMR_PAY_DIR: fresh }, encoding: 'utf8',
+        });
+        ok('agent creates a private data directory', (fs.statSync(fresh).mode & 0o777) === 0o700);
+        const data = path.join(root, 'data');
+        fs.mkdirSync(data, { mode: 0o755 });
+        fs.writeFileSync(path.join(data, 'config.json'), '{', { mode: 0o644 });
+        const started = spawnSync(process.execPath, [path.join(__dirname, '../bin/agent.js'), 'start'], {
+            env: { PATH: process.env.PATH || '', XMR_PAY_DIR: data }, encoding: 'utf8',
+        });
+        ok('agent tightens an existing data directory and config before startup',
+            (fs.statSync(data).mode & 0o777) === 0o700
+            && (fs.statSync(path.join(data, 'config.json')).mode & 0o777) === 0o600
+            && started.status !== 0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+if (process.platform !== 'win32') {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xmr-engine-deps-'));
+    try {
+        const data = path.join(root, 'data'), bin = path.join(root, 'bin');
+        fs.mkdirSync(data); fs.mkdirSync(bin);
+        fs.writeFileSync(path.join(data, 'config.json'), '{}');
+        fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+        spawnSync(process.execPath, [path.join(__dirname, '../bin/agent.js'), 'start'], {
+            env: { PATH: bin + path.delimiter + (process.env.PATH || ''), XMR_PAY_DIR: data }, encoding: 'utf8',
+        });
+        const pkg = JSON.parse(fs.readFileSync(path.join(data, 'package.json'), 'utf8'));
+        ok('automatic engine installation constrains vulnerable transitive dependencies',
+            pkg.private === true && pkg.overrides['serialize-javascript'] === '^7.0.5' && pkg.overrides.uuid === '^11.1.1');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
 
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -1,10 +1,4 @@
-// local demo of the full sovereign stack: serves the widget (single file, no
-// CDN) + a demo page, and mounts a REAL verify endpoint that checks proofs
-// against the stagenet chain. this is exactly what a merchant would run as a
-// serverless function — here as a tiny http server for local testing.
-//
-//   NODE_PATH=~/Documents/goxmr-landing/server/node_modules node examples/demo-server.js
-
+// Serve the local stagenet checkout demonstration.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -13,37 +7,29 @@ const { signConfig, generateSigningKey } = require('../src/config');
 
 const PORT = 8771;
 
-// the demo verifies against a funded stagenet wallet. point XMRPAY_DEMO_INFO
-// at a json file with { node, primaryAddress, orderSubaddress, restoreHeight }
-// (see test/gen-proof.js for how the maintainer harness produces one).
 const POC_INFO = process.env.XMRPAY_DEMO_INFO || path.join(__dirname, 'demo-info.json');
 let info;
 try {
     info = JSON.parse(fs.readFileSync(POC_INFO, 'utf8'));
 } catch {
     console.error(`demo needs a stagenet wallet info file at ${POC_INFO}`);
-    console.error('set XMRPAY_DEMO_INFO=/path/to/info.json — it must contain');
+    console.error('set XMRPAY_DEMO_INFO=/path/to/info.json: it must contain');
     console.error('{ node, primaryAddress, orderSubaddress, restoreHeight } for a funded stagenet wallet.');
     process.exit(1);
 }
 const NODES = [info.node, 'http://node.monerodevs.org:38089', 'http://node2.monerodevs.org:38089'];
 
-// in production you keep this key OFF the web server and sign configs offline.
-// here we generate one per boot just to demo the signed flow end to end.
 const signer = generateSigningKey();
 const signedEnv = signConfig({ address: info.orderSubaddress, amount: '0.1', networkType: 'stagenet' }, signer.privateKey);
 const SIGNED = Buffer.from(JSON.stringify(signedEnv)).toString('base64');
 const tampered = JSON.parse(JSON.stringify(signedEnv));
-tampered.config.address = info.primaryAddress; // swap the address, keep the old signature
+tampered.config.address = info.primaryAddress;
 const SIGNED_BAD = Buffer.from(JSON.stringify(tampered)).toString('base64');
 const FP = signedEnv.fingerprint;
 
-// stand-in for the merchant's orders table. ord_demo expects the real faucet
-// payment that sits on stagenet (0.1 XMR to the order subaddress).
 const ORDERS = new Map([
     ['ord_demo', { address: info.orderSubaddress, amount_xmr: '0.1', status: 'pending', tx_hash: null }],
-    // second order with the same address+amount — exists to DEMO the replay
-    // defense: pay ord_demo, then submit the same proof here → rejected.
+
     ['ord_demo2', { address: info.orderSubaddress, amount_xmr: '0.1', status: 'pending', tx_hash: null }],
     ['ord_demo3', { address: info.orderSubaddress, amount_xmr: '0.1', status: 'pending', tx_hash: null }],
 ]);
@@ -79,7 +65,6 @@ http.createServer(async (req, res) => {
             try { body = JSON.parse(raw); } catch { return json(res, 400, { error: 'bad json' }); }
             const { order_id, txid, proof } = body || {};
 
-            // cheap gates before any node rpc — the whole anti-spam story
             const order = ORDERS.get(order_id);
             if (!order) return json(res, 404, { error: 'unknown order' });
             if (order.status === 'paid') return json(res, 200, { paid: true, status: 'paid', reason: 'already confirmed', txid: order.tx_hash });
@@ -95,8 +80,7 @@ http.createServer(async (req, res) => {
                 alreadyUsed: async (id) => [...ORDERS.values()].some(o => o.tx_hash === id),
             });
             if (result.paid) {
-                // claim the txid in the same synchronous tick as the check —
-                // with a real database, use a UNIQUE constraint on tx_hash.
+
                 if ([...ORDERS.values()].some(o => o.tx_hash === result.txid)) {
                     console.log(`[verify] order=${order_id} → REPLAY blocked (txid already claimed)`);
                     return json(res, 200, { ...result, paid: false, status: 'replay', reason: 'this txid was already used to pay another order' });

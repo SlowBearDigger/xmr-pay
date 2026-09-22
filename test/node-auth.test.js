@@ -347,7 +347,7 @@ async function main() {
                     return response.ok;
                 } catch { return false; }
             },
-            async getPrivateSpendKey() { return '0'.repeat(64); },
+            async isViewOnly() { return true; },
             async close() { walletClosed = true; },
         };
         const fakeMonero = {
@@ -365,17 +365,27 @@ async function main() {
         ok('scanner reports the public upstream, not bridge or credentials', scanner.node === basicNode.url);
         ok('scanner connects wallet through loopback bridge', new URL(bridgeUri).hostname === '127.0.0.1' && bridgeUri !== basicNode.url);
         ok('scanner status reads authenticated daemon height', await scanner.tipHeight() === 12345);
+        ok('scanner confirms a wallet has no spend key', scanner.viewOnly === true);
         await scanner.close(false);
         ok('scanner closes its wallet', walletClosed);
         let bridgeStillOpen = true;
         try { await fetch(bridgeUri + '/get_height'); } catch { bridgeStillOpen = false; }
         ok('scanner closes its authenticated bridge', bridgeStillOpen === false);
 
+        const unknownWallet = { ...fakeWallet, async isViewOnly() { throw new Error('unavailable'); }, async save() { throw new Error('disk full'); } };
+        const unknownScanner = await createScanner({ primaryAddress: '5'.repeat(95), privateViewKey: 'a'.repeat(64), nodes: [basicNode], restoreHeight: 12345, path: '/tmp/xmrpay-nonexistent-test-wallet', monero: { async createWalletFull() { return unknownWallet; } } });
+        try {
+            ok('unknown wallet capability cannot claim view-only', unknownScanner.viewOnly === false);
+            let saveFailed = false;
+            try { await unknownScanner.save(); } catch { saveFailed = true; }
+            ok('wallet persistence failure reaches the caller', saveFailed);
+        } finally { await unknownScanner.close(false); }
+
         let failoverSetCalls = 0;
         const failoverWallet = {
             async setDaemonConnection() { failoverSetCalls++; },
             async isConnectedToDaemon() { return failoverSetCalls >= 2; },
-            async getPrivateSpendKey() { return '0'.repeat(64); },
+            async isViewOnly() { return true; },
             async close() {},
         };
         const failoverScanner = await createScanner({

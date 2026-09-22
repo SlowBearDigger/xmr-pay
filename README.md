@@ -1,147 +1,65 @@
 # xmr-pay
 
-Accept Monero on your own site. The money goes straight to your wallet. There is no
-company in the middle, no account to open, no fee paid to anyone, and nobody can
-freeze, see, or hold your funds but you.
-
-xmr-pay is a small toolkit you run yourself: payment links and QR codes, an
-embeddable checkout widget, and trustless on-chain payment detection. It is code,
-not a service.
+Accept Monero on your own site. Payments go directly to your wallet. XMRPay provides
+payment links, QR codes, a checkout widget and server-side verification.
 
 [![npm](https://img.shields.io/npm/v/xmr-pay?color=blue)](https://www.npmjs.com/package/xmr-pay)
 [![tests](https://img.shields.io/github/actions/workflow/status/SlowBearDigger/xmr-pay/test.yml?branch=main&label=tests)](https://github.com/SlowBearDigger/xmr-pay/actions/workflows/test.yml)
-[![runtime deps](https://img.shields.io/badge/runtime%20deps-0-brightgreen)](#)
-[![external requests](https://img.shields.io/badge/external%20requests-0-brightgreen)](#)
 [![license: MIT](https://img.shields.io/npm/l/xmr-pay)](LICENSE)
 
-MIT licensed · zero runtime dependencies · signed releases
+## Choose an integration
 
-**Quick links:** [Live demo (stagenet)](https://demo.xmrpay.shop) · [npm](https://www.npmjs.com/package/xmr-pay) · [WooCommerce plugin](https://github.com/SlowBearDigger/xmr-pay-woocommerce) · [Docs](docs/) · [5-minute start](#install)
+| Use | What runs |
+|---|---|
+| Donation link or QR | static page; no automatic payment verification |
+| Buyer submits a tx key or proof | your Node endpoint verifies one transaction |
+| Automatic detection and top-ups | a long-running view-only agent, or your wallet-rpc integration |
+| WooCommerce | the [standalone plugin](https://github.com/SlowBearDigger/xmr-pay-woocommerce), with native PHP verification or agent mode |
 
-## Running a WooCommerce store?
+The widget has no mandatory runtime dependencies and generates QR codes locally.
+Node verification needs the optional `monero-ts` peer, or your own wallet-rpc.
+Payment detection contacts your configured Monero nodes; fiat pricing in adapters may
+also contact a price feed. A static page alone does not verify an order.
 
-There is a separate, standalone plugin built on this engine:
+The agent holds a private view key but no spend key. It cannot send payments or
+refunds. Your backend owns the expected amount, payment identity and fulfillment.
+Browser status and DOM events do not authorize delivery.
 
-> **[xmr-pay for WooCommerce](https://github.com/SlowBearDigger/xmr-pay-woocommerce)**
+## Verification limits
 
-If you just want to accept Monero in a WordPress store with no code, start there.
-That plugin stands on its own (install it, paste your address, done) and this README
-is about the library underneath it. The two projects are independent; each links the
-other.
+- Nodes provide chain evidence. The proof verifier supports a quorum; the watch
+  agent uses one active node with failover. These are different trust models.
+- Confirmation thresholds reduce reorganisation risk. Settled orders are not
+  automatically reversed if a payment later disappears from the chain.
+- Watch mode sums partial payments. Proof mode verifies one transaction at a time.
+- The CLI wizard sets 24-hour expiry; the direct HTTP example defaults to disabled.
+  Late or unseen payments may require manual reconciliation. Review the saved config.
+- A merchant must process callbacks idempotently and persist payment records.
 
-## See it live (stagenet, no real money)
+See the [agent guide](docs/AGENT.md), [HTTP API](docs/API.md),
+[FAQ](docs/FAQ.md) and [suite components](docs/SUITE.md). Test the full checkout on
+stagenet before deploying a change. The [demo](https://demo.xmrpay.shop) uses test coins.
 
-> [live.xmrpay.shop](https://live.xmrpay.shop) : configure it yourself and watch it verify a payment
-> [demo.xmrpay.shop](https://demo.xmrpay.shop) : a full demo store, pay with free test XMR
-> [xmrpay.shop/demo.html](https://xmrpay.shop/demo.html) : the checkout widget and the "prove you paid" flow
+## Release version
 
-## How it compares
-
-Every option here is Monero-only and non-custodial in spirit — no fiat processors, no
-custody. The honest difference is how much you have to keep running, and whether anything
-sits between the buyer and your wallet. (xmr-pay is the JavaScript library — payment links,
-a checkout widget, and on-chain verification; WooCommerce and the PHP engine live in the
-separate [companion plugin](https://github.com/SlowBearDigger/xmr-pay-woocommerce).)
-
-| | **xmr-pay** | BTCPay Server (Monero plugin) | AcceptXMR | MoneroPay | monerowp |
-|---|---|---|---|---|---|
-| Custody | Non-custodial, view key only | Non-custodial (self-run) | Non-custodial, view pair (no hot wallet) | View-only or hot wallet | View-only recommended |
-| Always-on server / daemon? | **No** — a static page / widget client-side, a serverless function, or watch mode in a runtime you already run | Yes — full server + wallet-rpc | Yes — a process + your own daemon | Yes — daemon + wallet-rpc + database | Yes — wallet-rpc on your server |
-| Runtime dependencies | **Zero** | Full stack (Docker) | Rust crates | Go + database | PHP + wallet-rpc |
-| Third party in the verify path | **None** (your own node) | None (your own node) | None (your own node) | None (your own node) | wallet-rpc, or a public block explorer |
-| Drop-in WooCommerce | Via the companion plugin (no server) | Via BTCPay's WC plugin (needs the server) | No (Rust library) | No (HTTP API — build your own) | Yes |
-| Monero refunds | Non-custodial claim-link (helpers in the lib; full buyer flow in the plugin) | Manual (collect a return address) | Not built-in | Via its outgoing API (needs a hot wallet) | Not built-in |
-| Maturity & adoption | New (2026) | Most mature, years in production | Established, active | Established | Long-standing community plugin |
-
-> **Where the others are genuinely stronger:** BTCPay Server does far more (multi-coin,
-> point-of-sale, Lightning, accounting) and is battle-tested; AcceptXMR is a fast Rust
-> gateway with realtime updates and the closest non-custodial philosophy to ours;
-> MoneroPay's daemon can also send outgoing payments; monerowp has years of real merchant
-> use. xmr-pay is the newest and least proven of the bunch. Its bet is narrow on purpose:
-> Monero only, nothing always-on by default, zero dependencies, an npm library plus a static
-> checkout — and a companion WooCommerce plugin (built on this same engine) that adds
-> non-custodial claim-link refunds.
-
-## You do not need a dedicated server
-
-This is worth being blunt about, because it is where most Monero tooling adds
-friction: confirming a Monero payment is, underneath, just reading public blockchain
-data and doing some math. So none of the ways to do it require a box that stays on
-24/7.
-
-> **Proof mode** is a stateless function that runs on demand. It can live in a
-> serverless function or one small route on the site you already have. Nothing is
-> always-on.
-> **Watch mode** runs wherever you already run code, against your own wallet-rpc or
-> a built-in view-only scanner that needs no daemon at all.
-> **Inside WordPress**, the plugin does both in pure PHP. No Node, no daemon, no
-> separate process. WordPress's own cron and the buyer's checkout page trigger the
-> check; the rest of the time nothing runs.
-
-### Why that is reasonably trustworthy (and where the limits honestly are)
-
-> **It can see, it cannot spend.** Detection only ever holds your *view* key. It can
-> read incoming payments; it can never move your money. The key that spends funds is
-> never asked for and never stored.
-> **The amount is proven, not claimed.** Monero commits the real amount of every
-> output on-chain. The verifier checks that commitment, so a forged or edited amount
-> is rejected. It cannot be talked into seeing money that is not there.
-> **It fails closed.** Several independent checks must all pass: the amount
-> commitment, enough confirmations, the funds are not time-locked, and no
-> transaction is counted twice. If anything is missing, or a node will not answer,
-> the order stays unpaid. It never guesses "paid".
-> **The honest caveat:** verification trusts the Monero node you point it at to tell
-> the truth. A public node is fine for most sites. For serious money, point it at
-> your own node, or require two nodes to agree. That one thing is on you, and the
-> setting is right there.
-
-The verification math is cross-checked against the reference Monero library and the
-whole money path is covered by an adversarial test suite, so "no server" does not
-mean "cut corners".
-
-## What you get
-
-> **Your money, directly.** Payments land in your wallet. xmr-pay never holds,
-> routes, or can touch a cent. There is no xmr-pay in the payment path.
-> **No accounts, no API keys, no monthly fee.** It is code you run, not a service
-> you subscribe to.
-> **Privacy by default.** Monero hides amounts and parties on-chain, and nothing in
-> the buyer's browser is trusted to settle an order.
-> **Underpaid, or paid in two goes?** Watch mode sums the payments, so the order
-> finishes itself once the total adds up, and the buyer can top up to the same
-> address.
-
-## The truths (please read before taking real money)
-
-We would rather tell you the rough edges than have you find them with a customer.
-
-> **Monero is irreversible, and the sender is hidden, so there are no automatic
-> refunds.** If you need to refund someone you send them XMR back by hand. That is
-> the trade for having no chargebacks and no middleman.
-> **You are trusting a node to tell the truth.** A single public node could lie, be
-> slow, or go down. Fine for tips. For real revenue, run your own node or require two
-> nodes to agree (it then refuses to confirm rather than trust one source).
-> **Few confirmations is fast but reversible.** Accepting at zero confirmations is
-> instant, but a payment can still vanish in a chain reorg. Use more confirmations
-> for higher-value orders. This is your risk dial to set.
-> **A brand-new transaction can take a moment to verify on a public node.** If a
-> buyer submits a proof for a transaction still in the mempool, a public node may not
-> serve it yet and the check comes back "try again", never a false "paid". It clears
-> once the transaction is in a block. Your own node removes the wait.
-> **The browser is never trusted.** Anything shown in a buyer's browser can be faked
-> by that buyer. Goods are released only after your own server verified a real
-> payment on-chain. Same rule as every serious payment system.
+The prepared release is **2.0.0**. [Versioning](docs/VERSIONING.md) reserves v3 for
+FCMP++ and Carrot. Follow the migration notes in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
 ```
-npm i xmr-pay monero-ts        # monero-ts only needed for server-side detection
+npm i xmr-pay                 # links, QR and widget
+# For WASM verification, also install monero-ts with the overrides in SECURITY.md.
 ```
 
-The network is explicit at every entry point. Default is mainnet; use stagenet to
+Use Node 20 or later for the agent and verification examples. Follow the
+[dependency guidance](SECURITY.md#dependencies) for existing installations.
+
+Server-side network selection defaults to mainnet; use stagenet to
 test with no real money:
 
-> **Widget:** the network follows the address you pass — a `4…` address is mainnet, `5…`/`7…` is stagenet (no separate attribute).
+> **Widget:** the receiving address determines where the payment goes. A UI attribute
+> cannot convert an address to another network; keep it consistent with the backend.
 > **Verify:** `verifyPayment({ networkType: 'stagenet', ... })`.
 > **Agent:** the `XMR_NETWORK=stagenet` env var (the `npx xmr-pay` wizard asks).
 
@@ -152,16 +70,15 @@ npx xmr-pay        # setup wizard (address + view key + node), then it runs
 ```
 
 It scans from the current block (no historical rescan), generates the token and
-webhook secret, asks your settlement speed (`instant` 0-conf, `fast` 1 block,
-`secure` 10 blocks), persists its wallet and orders, and prints the exact values to
-paste into your store. `npx xmr-pay start` runs it again later.
+webhook secret, collects the confirmation setting, persists its wallet and orders,
+and prints the values to paste into your store. `npx xmr-pay start` runs it again later.
 
 ## How it works
 
 | Module | Runs | Purpose |
 |---|---|---|
 | `xmr-pay/core` | browser + server | payment URIs (links), QR as SVG, per-order amount nonces |
-| `xmr-pay` (verify) | your backend or serverless fn | re-verify a buyer's tx proof on-chain, trustless |
+| `xmr-pay` (verify) | your backend or serverless fn | verify a buyer's tx proof against configured nodes |
 | `xmr-pay/watch` | your backend | auto-detection through your own monero-wallet-rpc |
 | `xmr-pay/scanner` | your backend | view-only WASM scanner, auto-detection with NO wallet-rpc daemon |
 | `xmr-pay/agent` | your backend | long-running order manager: per-order subaddress, summing, signed paid webhook |
@@ -189,14 +106,14 @@ watch mode (the agent; no monero-wallet-rpc needed):
         > paid (handles partial / split / top-up payments) > signed order.paid webhook
 ```
 
-They share the same exact-math core, so a payment counts identically either way.
-Many shops run watch mode and keep proof as a dispute path. Watch mode is documented
+They share integer amount helpers, but use different transports and node trust
+policies. Proof mode checks one transaction; watch mode sums payments. Watch mode is documented
 in full in [docs/AGENT.md](docs/AGENT.md).
 
 ## Checkout widget
 
-One self-hosted file (`widget/xmr-pay.js`, ~98 KB, bundles its own QR encoder, no
-external requests ever). Drop it in and you have a Monero checkout.
+One self-hosted file (`widget/xmr-pay.js`) bundles the QR encoder. It contacts the
+verify, status and receipt endpoints you configure; it needs no external QR service.
 
 ```html
 <script src="/xmr-pay.js"></script>
@@ -271,13 +188,14 @@ caveat): [docs/WALLETS.md](docs/WALLETS.md).
 
 ```js
 const { makeAmountNonce } = require('xmr-pay/core');
-const amount = makeAmountNonce('0.05');   // '0.050000004821', unique per order
+const amount = makeAmountNonce('0.05');   // e.g. '0.050000004821'
 // store { order_id, amount } in YOUR db; render the widget with that amount
 ```
 
-The random piconero tail makes each order's on-chain amount unique, so a proof
-structurally fits only its own order: a secondary anti-replay guard on top of your
-txid dedup. The added value is dust (default ≤ 0.000001 XMR).
+The random piconero tail helps distinguish amounts but can collide, and a larger
+payment may satisfy more than one amount. It is not replay protection. Atomically
+claim each accepted transaction in your order store. The added value is at most
+0.000001 XMR by default.
 
 ## Proof mode
 
@@ -300,12 +218,12 @@ const r = await verifyPayment({
 ```
 
 Full endpoint with anti-spam gates: [examples/serverless.js](examples/serverless.js).
-Drop it in Vercel/Netlify/Express; stateless, your orders table is the only state
-and it is already yours. One-click deploy template: [docs/DEPLOY.md](docs/DEPLOY.md).
+Connect it to durable order storage and atomic transaction deduplication before
+deployment. The sample uses an in-memory order map. See [docs/DEPLOY.md](docs/DEPLOY.md).
 
 A freshly broadcast (mempool) transaction may not be retrievable from a public node
 yet, so verification returns `node-error` (retryable, never a false `paid`) until the
-tx is in a block. Run your own node to remove the wait.
+tx is in a block. Your own node gives you control over availability; it does not guarantee immediate detection.
 
 <details>
 <summary><b>No <code>monero-ts</code>? Verify through your wallet-rpc</b></summary>
@@ -381,7 +299,8 @@ if (r.paid) {
 // receiver: verifySignature(rawBody, secret, req.headers['x-xmr-pay-signature'])
 ```
 
-Retries with backoff built in. (The agent fires this for you, once, on settle.) The
+`sendWebhook` makes a bounded number of attempts. The HTTP agent also persists
+undelivered notifications and retries them after restart; duplicates are possible. The
 signed body carries an `event_ts` (unix ms): after verifying the signature, reject a
 delivery whose `event_ts` is stale, and stay idempotent on `order_id`, so a replayed
 webhook can't trigger a second fulfillment. The browser also gets an `xmr-pay:paid`
@@ -410,11 +329,11 @@ bundled WASM wallet and its transitive dependencies entirely.
 | Buyer fakes "paid" in devtools (forge the event, edit DOM, point `verify-url` at a fake server) | cosmetic, only their screen; your order stays unpaid. Fulfill server-side |
 | Forged or tampered proof | fails cryptographic verification on-chain |
 | Proof for a payment to someone else | proofs are address-bound, rejected |
-| Reusing a real proof on another order | amount-nonce + `alreadyUsed`, returns `replay`/`underpaid` |
+| Reusing a real proof on another order | `alreadyUsed` checks prior use; the store must enforce an atomic unique transaction claim |
 | Off by 1 piconero | integer-piconero compare, returns `underpaid` |
-| Amount above Monero's max supply (uint64) | rejected; `xmrToPico`/`atomicToPico` enforce the on-chain ceiling, parity with monerod's `parse_amount` |
-| Time-locked payment (`unlock_time` set, confirms but frozen) | raw tx fetched from the daemon; `unlock_time ≠ 0` returns `locked`. Fails closed if no node returns the tx |
-| A node lies | `quorum: 2+` returns `node-disagreement` |
+| Amount above the uint64 atomic-value range | rejected by `xmrToPico`/`atomicToPico`; this is a serialization bound, not Monero's total supply |
+| Time-locked payment (`unlock_time` set, confirms but frozen) | raw tx fetched from the daemon; a nonzero `unlock_time` that has not elapsed returns `locked`. Fails closed if no node returns the tx |
+| Proof-verification nodes disagree | the verifier requires a sufficient agreeing group; quorum does not protect against agreeing dishonest nodes |
 | A node or wallet-rpc is down, slow, or times out | `node-error`, transient and retryable, never a false `paid`. Distinct from `invalid` so you can tell "retry" from "reject"; the example endpoint answers `503` |
 | Endpoint spam | gate on "order exists and pending" before any RPC |
 | Double-submit race (same txid, concurrent) | claim the txid atomically with a `UNIQUE` constraint on `tx_hash` |
@@ -428,15 +347,15 @@ bundled WASM wallet and its transitive dependencies entirely.
 > server returned `paid` and wrote it to your order record. Same rule as Stripe.
 > **`UNIQUE` constraint on `tx_hash`** in your orders table closes the replay race
 > the `alreadyUsed` callback only narrows.
-> **Use `makeAmountNonce` for every order** (proof mode), so a proof can't fit
-> another order.
+> **Amount nonces are optional disambiguation**, not a replacement for atomic
+> transaction deduplication.
 > **Scale `minConfirmations` with value**: 1 for small carts, 10 for high-value
 > (reorg safety). `minConfirmations: 0` (mempool) is opt-in risk.
 > **`quorum: 2` for high-value orders**, so two independent nodes must agree.
 > **Never take `address`/`amount` from the request body**; always your own order
 > record (the examples do this).
 > **Your page is the trust root.** If it is compromised the address can be swapped,
-> so use a signed config + published fingerprint (below) for real-money stores.
+> so use a signed config and verify its fingerprint through a trusted channel (below).
 
 </details>
 
@@ -444,8 +363,9 @@ bundled WASM wallet and its transitive dependencies entirely.
 <summary><b>Signed config (tamper-evident address)</b></summary>
 
 Signing moves address integrity onto a key the merchant keeps off the web server, so
-a breach can serve the real signed config or a broken one, but cannot mint a new one
-for the attacker's address.
+an attacker cannot mint a valid replacement envelope without the signing key.
+A fully compromised page can still replace the widget or its pinned key. Buyers
+need a trusted copy of the fingerprint outside that page to detect that attack.
 
 ```js
 const { generateSigningKey, signConfig } = require('xmr-pay/config');
@@ -461,50 +381,40 @@ const env = signConfig({ address, amount: '0.05', networkType: 'mainnet' }, key.
 The widget verifies the Ed25519 signature (WebCrypto, no extra dependency), uses the
 signed address, and shows `Signed · <fingerprint>`. A "signed" config that fails
 verification shows a red warning and no payable address. Pin a known signer with
-`pubkey="…"` or `fingerprint="…"`. With the fingerprint known out of band a buyer
-catches an address swap even on a fully compromised page.
+`pubkey="…"` or `fingerprint="…"`. A buyer must check the envelope with a trusted verifier and an independently
+obtained fingerprint if the page itself may be compromised.
 
 </details>
 
 <details>
 <summary><b>Privacy: what a node sees</b></summary>
 
-Verifying a payment asks one node for one transaction by its txid. The node learns
-the txid and your IP/timing, not the amount or address (derived locally). That is
-less than a normal wallet exposes. Close the exposure at the connection level: run
-your own node (list it first in `nodes`), or egress over Tor / point at an `.onion`
-node. `nodes` takes any URL, configuration not code.
+Proof verification requests a transaction by ID from the configured nodes; watch
+mode requests chain data to scan locally. Nodes see the requested data and the
+connection address and timing. Address matching and amount decoding happen locally.
+Use your own nodes or configure network routing appropriate to your privacy needs. Use supported HTTP(S) URLs and configure any proxy routing outside the library.
 
 </details>
 
 ## Demo
 
-A complete, deployable demo lives in [`demo/`](demo/): a stagenet store checkout that
+A complete, deployable demo lives in [demo/](https://github.com/SlowBearDigger/xmr-pay/tree/main/demo): a stagenet store checkout that
 verifies a real payment on-chain, plus a mainnet tip widget with no backend.
 
 ```
 cd demo && npm install && npm start    # http://localhost:8780, click "Try it"
 ```
 
-## Validated
+## Tests
 
-187 offline checks plus a 92,006-case math fuzz, plus live stagenet validation.
+`npm test` runs the offline regression, property, concurrency and invariant suites.
+`npm run build` rebuilds the widget and hosted copy from source. Live stagenet tests
+are separate and need `monero-ts`, matching keys and a reachable node; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Offline: input gates 40, core (links/QR/nonce) 22, signed configs 10, watch summing
-> 14, webhooks 8, wallet-rpc verify 20, adversarial "chaos" 27, agent lifecycle 17,
-> monerod amount parity 29, node-quorum 13, plus order-independence and
-> byzantine-duplicate stress. The fuzz hammers the piconero math (shortfall, summing,
-> round-trips) so paying the displayed difference always completes an order to the
-> exact piconero, including the float traps (`0.1 + 0.2 = 0.3`). The parity suite
-> mirrors monerod's own `parse_amount` (overflow ceiling, 13th-decimal, signs) so we
-> never accept an amount the chain rejects.
-> Live on stagenet: proof verify through a 13-case adversarial matrix (exact,
-> underpaid/overpaid to the piconero, replay, address-bound rejection, malformed
-> returns `invalid`, dead node returns `node-error`, 2-node quorum, at 0-conf and
-> 1-conf), all through the unlock_time gate; the view-only scanner detecting a real
-> payment via the view key alone; two real payments summed on one subaddress to
-> complete an order; the agent end to end (per-order subaddress, settle, one-time
-> signed webhook). Spot-checked against a real mainnet transaction key.
+Tests cover amount precision, proof gates, time locks, duplicate evidence, node
+agreement, agent persistence, callbacks and browser input handling. They do not
+replace a checkout test on the platform and versions you deploy.
 
 ## Donate
 
@@ -556,15 +466,15 @@ it.
 We stand on excellent open-source work. Give them a star:
 
 > [monero-project](https://www.getmonero.org/): the protocol; our money-math parity suite mirrors `parse_amount`'s own unit tests.
-> [monero-integrations / monerophp](https://github.com/monero-integrations/monerophp) (MIT): the pure-PHP ed25519, key-derivation and base58 primitives the WordPress-native verifier is vendored on. The breakthrough that made "verify in PHP" possible.
+> [monero-integrations / monerophp](https://github.com/monero-integrations/monerophp) (MIT): the pure-PHP ed25519, key-derivation and base58 primitives the WordPress-native verifier is vendored on. Used by the PHP verifier.
 > [kornrunner/php-keccak](https://github.com/kornrunner/php-keccak) (MIT): Keccak-256 with Monero's padding, in pure PHP.
 > [monero-ts](https://github.com/woodser/monero-ts) (woodser, MIT): the WASM Monero library powering the watch/proof paths, and our ground-truth reference for cross-checking the PHP verifier.
 > [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT): the checkout widget's self-contained QR encoder.
-> Inspiration: [BTCPay Server](https://btcpayserver.org/)'s Monero plugin, [MoneroPay](https://gitlab.com/moneropay/moneropay), and [AcceptXMR](https://github.com/busyboredom/acceptxmr). We studied all three to match (and, on reorg-safety, double-spend and arithmetic, exceed) their detection model.
+> Inspiration: [BTCPay Server](https://btcpayserver.org/)'s Monero plugin, [MoneroPay](https://gitlab.com/moneropay/moneropay), and [AcceptXMR](https://github.com/busyboredom/acceptxmr). Related open-source payment projects.
 
 ## License
 
 MIT, including the vendored [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
-(c) Kazuhiko Arase, bundled so the widget makes zero external requests.
+(c) Kazuhiko Arase, bundled so QR generation needs no external service.
 
 A [GoXMR](https://goxmr.click) project, also available for [WordPress / WooCommerce](https://github.com/SlowBearDigger/xmr-pay-woocommerce).

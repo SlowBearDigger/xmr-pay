@@ -4,20 +4,40 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - Unreleased
+
+### Migration
+
+- Set `AGENT_TOKEN` on every bind, including loopback; keep it on the merchant backend.
+- Send order creation as a JSON object with `Content-Type: application/json`; invalid payload types are rejected.
+- Keep wallet and order files together and stop on persistence errors. Existing engine installations must apply the dependency overrides in `SECURITY.md` and reinstall.
+- Review expiry in existing CLI config: the wizard writes `expiryHours: 24` and `paidRetentionHours: 168`; use `0` to disable either. The direct HTTP example defaults both to `0`.
+
+### Changes
+
+- Report clipboard success only after a successful copy; keep the address visible when copying fails.
+
+- Apply security overrides when the CLI installs the optional Monero engine.
+- Require authentication on every agent bind, reject malformed order requests, and generate unpredictable order IDs.
+- Persist wallet allocation before returning an order; preserve pending funds and undelivered payment notifications.
+- Reject malformed unlock times and unknown wallet capabilities; propagate wallet save failures.
+- Escape widget confirmation output, restrict receipt verifier URLs, and prevent webhook redirects.
+- Bound the demo's static file paths and simplify source comments without changing executable logic.
+
 ## [1.1.0] - 2026-06-21
 
 ### Added
-- `./state` — the canonical invoice state machine (created/processing/settled/expired/invalid), mirrored by the WooCommerce plugin and pinned by conformance tests.
-- `./refund` — shared, configurable claim-link expiry semantics.
-- `./report` — shared CSV column schema (`csvSafe`/`csvField`/`ordersToCsv`).
-- `hosted/` — a fully static, zero-server checkout page that hosts the `<xmr-pay>` widget.
-- `docs/EVENTS.md` — the state / event / webhook / refund-record contract.
+- `./state`: the canonical invoice state machine (created/processing/settled/expired/invalid), mirrored by the WooCommerce plugin and pinned by conformance tests.
+- `./refund`: shared, configurable claim-link expiry semantics.
+- `./report`: shared CSV column schema (`csvSafe`/`csvField`/`ordersToCsv`).
+- `hosted/`: a fully static, zero-server checkout page that hosts the `<xmr-pay>` widget.
+- `docs/EVENTS.md`: the state / event / webhook / refund-record contract.
 - Widget: visibility-triggered poll + adaptive backoff + a 3-step progress indicator; accessibility (focus rings, `role=alert`).
 - Stress/property suites: `agent.load`, `chaos-reorg`, `invariant-stress`.
 
 ### Fixed
 - `createOrder` now stores the **canonical** amount, so a float input (e.g. `0.1 + 0.2`) can no longer throw in `checkOrder` and brick settlement.
-- `settled` latches on the `check()` path — a reorg-driven re-check can no longer un-settle a paid order.
+- `settled` latches on the `check()` path: a reorg-driven re-check can no longer un-settle a paid order.
 - Agent: dropped the banned trailing-slash regex on node URLs.
 
 ## [1.0.2] - 2026-06-20
@@ -25,7 +45,7 @@ All notable changes to `xmr-pay` are documented here. The format follows
 ### Security
 - `summarizeTransfers` now deduplicates by the one-time OUTPUT KEY (`outKey`) when a
   caller supplies it, not by txid alone. This is the burning-bug (Monero, 2018) defence:
-  two outputs sharing a one-time key — even in different txids — are at most one spendable
+  two outputs sharing a one-time key: even in different txids: are at most one spendable
   output (shared key image), so counting both would credit one real payment twice. The
   bundled transports (monero-ts / monero-wallet-rpc, both wallet2) already collapse burns
   before a row is built, so this is defence-in-depth that makes the public
@@ -56,14 +76,14 @@ soak, stress, reorg, and false-paid hunting.
   deduplicates by txid keeping the most-creditable copy (confirmed over pool, more
   confirmations, then the smaller amount). Previously a first-wins dedup made the
   verdict depend on the order the wallet/node returned rows in, which could either
-  strand a confirmed payment as "mempool" or — with a duplicate that disagreed on
-  amount — settle an order on an inflated claim. Both are now closed.
+  strand a confirmed payment as "mempool" or: with a duplicate that disagreed on
+  amount: settle an order on an inflated claim. Both are now closed.
 - The node-quorum verdict in `verifyPayment` picks the largest agreeing cluster
   rather than anchoring on the first answer, so one misconfigured/malicious node
   in the first position can no longer block a valid majority.
 
 ### Added
-- `test/adversarial-stress.test.js` — order-independence, in/pool dedup, byzantine
+- `test/adversarial-stress.test.js`: order-independence, in/pool dedup, byzantine
   duplicate amounts, in/pool/locked flapping, dust floods, and a no-over-credit
   fuzz. Wired into `npm test`.
 - Defensive guards: non-http(s) node URIs are rejected up front; a single-node
@@ -71,7 +91,7 @@ soak, stress, reorg, and false-paid hunting.
 
 ### Security
 - The time-lock gate cross-checks the daemon echoes the requested `tx_hash`, takes
-  the minimum tip across nodes, and fails closed on disagreement — a lying node
+  the minimum tip across nodes, and fails closed on disagreement: a lying node
   cannot flip a frozen output to spendable.
 
 ## [0.4.0-beta] - 2026-06

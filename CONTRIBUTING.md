@@ -1,12 +1,11 @@
 # Contributing
 
-Glad you're here. This is a payments library, so the bar is: every change
-must make it harder, not easier, to get money wrong.
+Payment changes need reproducible evidence and regression coverage.
 
 ## What's welcome
 
 - Bug fixes with a test that fails before and passes after
-- Wallet compatibility reports (see the issue template — even "Cake renamed
+- Wallet compatibility reports (see the issue template: even "Cake renamed
   the menu" is useful)
 - Widget translations (the `XP_STR` dict in `widget/xmr-pay.part.js`)
 - Docs fixes, threat-model holes, security review
@@ -29,13 +28,14 @@ npm run test:live   # needs a funded stagenet wallet harness + monero-ts
 ```
 
 The live suite expects a stagenet harness directory (env `XMRPAY_POC`)
-containing a funded wallet — see the header of `test/live-stagenet.js`. Most
+containing a funded wallet: see the header of `test/live-stagenet.js`. Most
 PRs don't need it; CI of record runs offline suites.
 
 ## Widget changes
 
 Edit `widget/xmr-pay.part.js`, never `widget/xmr-pay.js` (it's assembled).
-Rebuild with `npm run build` and commit both. Builds are reproducible — your
+Rebuild with `npm run build` and include both generated copies,
+`widget/xmr-pay.js` and `hosted/xmr-pay.js`. Builds are reproducible: your
 rebuilt file must be byte-identical to what you commit.
 
 ## Security issues

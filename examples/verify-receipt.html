@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Verify a Monero payment receipt — xmr-pay</title>
+<title>Verify a Monero payment receipt: xmr-pay</title>
 <style>
   :root{ --bg:#0d0f0d; --fg:#e8e8e3; --dim:#8a8f87; --line:#22271f; --ok:#39d353; --bad:#ff5252; --acc:#ff6600; }
   *{ box-sizing:border-box }
@@ -42,7 +42,7 @@
 <body>
 <main>
   <h1><b>xmr-pay</b> · receipt verifier</h1>
-  <p class="sub">Paste a payment receipt below. Verification runs entirely in your browser — nothing is uploaded. A valid receipt proves the merchant signed exactly these payment facts; if it carries tx_proofs, anyone with a Monero node can also confirm it against the chain.</p>
+  <p class="sub">Paste a payment receipt below. Verification runs entirely in your browser: nothing is uploaded. A valid receipt proves the merchant signed exactly these payment facts; if it carries tx_proofs, anyone with a Monero node can also confirm it against the chain.</p>
 
   <textarea id="in" placeholder='Paste the receipt JSON (the signed envelope) here…' spellcheck="false"></textarea>
   <div class="row">
@@ -61,13 +61,13 @@
     <div id="proofs"></div>
   </div>
 
-  <p class="note">Offline check needs a browser with WebCrypto Ed25519 (recent Chrome / Safari / Firefox). The receipt format and this verifier are open source: <a href="https://github.com/SlowBearDigger/xmr-pay" target="_blank" rel="noopener">github.com/SlowBearDigger/xmr-pay</a> — host this file anywhere, it has no dependencies.</p>
+  <p class="note">Offline check needs a browser with WebCrypto Ed25519 (recent Chrome / Safari / Firefox). The receipt format and this verifier are open source: <a href="https://github.com/SlowBearDigger/xmr-pay" target="_blank" rel="noopener">github.com/SlowBearDigger/xmr-pay</a>: host this file anywhere, it has no dependencies.</p>
 </main>
 
 <script>
 const TYP = 'xmr-pay.receipt/1';
 
-// deterministic JSON — identical to the signer's canonical() (sorted keys, no whitespace)
+// deterministic JSON: identical to the signer's canonical() (sorted keys, no whitespace)
 function canonical(v){
   if (v === null || typeof v !== 'object') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
@@ -103,7 +103,7 @@ async function verifyEnvelope(env){
     ok = await crypto.subtle.verify({name:'Ed25519'}, key, b64ToBytes(env.sig), new TextEncoder().encode(canonical(env.receipt)));
   }catch(e){ return { valid:false, reason:'bad key or signature encoding ('+e.message+')' }; }
   const fp = await fingerprint(env.pubkey);
-  if (!ok) return { valid:false, reason:'signature does not match the receipt — it was altered', fingerprint:fp };
+  if (!ok) return { valid:false, reason:'signature does not match the receipt: it was altered', fingerprint:fp };
   return { valid:true, reason:'signature is valid', fingerprint:fp };
 }
 
@@ -122,7 +122,7 @@ function render(env, res, pin){
   }
   v.className = 'verdict show ' + (res.valid ? 'ok' : 'bad');
   big.textContent = res.valid ? '✓ Authentic receipt' : '✗ Not verified';
-  why.textContent = res.reason + (res.fingerprint ? '  — signer ' + res.fingerprint + pinNote : '');
+  why.textContent = res.reason + (res.fingerprint ? ' : signer ' + res.fingerprint + pinNote : '');
 
   if (!env || !env.receipt) return;
   const r = env.receipt;
@@ -131,18 +131,18 @@ function render(env, res, pin){
     ['Amount', '<span class="chip">'+picoToXmr(r.amountPico)+' XMR</span>'],
     ['Received', picoToXmr(r.receivedPico)+' XMR'],
     ['Paid to', esc(r.address)],
-    ['Network', esc(r.network||'—')],
+    ['Network', esc(r.network||'-')],
     ['Confirmations', esc(r.confirmations)],
-    ['Paid at', r.paidAt ? esc(new Date(r.paidAt).toISOString()) : '—'],
-    ['Merchant', esc((r.merchant&&r.merchant.name)||'—') + (r.merchant&&r.merchant.fingerprint?' · <span class="chip">'+esc(r.merchant.fingerprint)+'</span>':'')],
-    ['Signer fp', esc(res.fingerprint||'—')],
-    ['Tx hashes', (r.txids||[]).map(esc).join('<br>')||'—'],
+    ['Paid at', r.paidAt ? esc(new Date(r.paidAt).toISOString()) : '-'],
+    ['Merchant', esc((r.merchant&&r.merchant.name)||'-') + (r.merchant&&r.merchant.fingerprint?' · <span class="chip">'+esc(r.merchant.fingerprint)+'</span>':'')],
+    ['Signer fp', esc(res.fingerprint||'-')],
+    ['Tx hashes', (r.txids||[]).map(esc).join('<br>')||'-'],
   ];
   table.innerHTML = rows.map(([k,val])=>`<tr><td class="k">${k}</td><td class="v">${val}</td></tr>`).join('');
 
   const tp = r.txProofs||[];
   if (tp.length){
-    proofs.innerHTML = '<div class="note" style="margin-top:14px">On-chain proof (trustless) — this receipt carries '+tp.length+' Monero tx_proof'+(tp.length>1?'s':'')+'. Verify against the chain yourself, no trust in the merchant needed, e.g. in <code>monero-wallet-cli</code>: <code>check_tx_proof &lt;txid&gt; &lt;address&gt; "" &lt;signature&gt;</code></div>' +
+    proofs.innerHTML = '<div class="note" style="margin-top:14px">On-chain proof (trustless): this receipt carries '+tp.length+' Monero tx_proof'+(tp.length>1?'s':'')+'. Verify against the chain yourself, no trust in the merchant needed, e.g. in <code>monero-wallet-cli</code>: <code>check_tx_proof &lt;txid&gt; &lt;address&gt; "" &lt;signature&gt;</code></div>' +
       tp.map(p=>`<div class="proof"><div class="lbl">txid <span class="copy" data-c="${esc(p.txid)}">copy</span></div><code>${esc(p.txid)}</code><div class="lbl" style="margin-top:6px">address</div><code>${esc(p.address)}</code><div class="lbl" style="margin-top:6px">signature <span class="copy" data-c="${esc(p.signature)}">copy</span></div><code>${esc(p.signature)}</code></div>`).join('');
   } else {
     proofs.innerHTML = '<div class="note" style="margin-top:14px">This receipt has the merchant signature only (no tx_proof). It proves the merchant attested the payment; for a fully trustless check the merchant would attach a Monero tx_proof.</div>';
@@ -162,8 +162,8 @@ document.getElementById('go').onclick = run;
 document.getElementById('sample').onclick = ()=>{
   document.getElementById('in').value = JSON.stringify({
     v:1, typ:TYP, alg:'ed25519',
-    receipt:{ typ:TYP, orderId:'ord_demo', address:'demo — load a real receipt from your agent', amountPico:'250000000000', receivedPico:'250000000000', txids:[], confirmations:10, paidAt:null, network:'stagenet', merchant:{fingerprint:'0000-0000-0000-0000-0000-0000'} },
-    pubkey:'(sample has no real signature — it will read as Not verified)', fingerprint:'0000-0000-0000-0000-0000-0000', sig:''
+    receipt:{ typ:TYP, orderId:'ord_demo', address:'demo: load a real receipt from your agent', amountPico:'250000000000', receivedPico:'250000000000', txids:[], confirmations:10, paidAt:null, network:'stagenet', merchant:{fingerprint:'0000-0000-0000-0000-0000-0000'} },
+    pubkey:'(sample has no real signature: it will read as Not verified)', fingerprint:'0000-0000-0000-0000-0000-0000', sig:''
   }, null, 2);
 };
 

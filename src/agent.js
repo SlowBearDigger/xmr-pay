@@ -1,44 +1,19 @@
-// a long-running PAYMENT AGENT: wraps a view-only scanner, manages per-order
-// subaddresses + state, and fires a ONE-TIME callback when an order settles. the
-// scanner's WASM cold start is paid ONCE at startup; per-order checks are
-// incremental (fast). reusable + testable with anything exposing newSubaddress()
-// and checkOrder() — so the order lifecycle is unit-tested without monero-ts.
-//
-//   const agent = createPaymentAgent({ scanner, minConfirmations: 1, onPaid });
-//   const o = await agent.createOrder({ id: 'ord_42', amount: '0.05' });  // → {address, ...}
-//   const r = await agent.check('ord_42');   // {paid, status, receivedXmr, shortfallXmr, ...}
-//   agent.start();   // background poller transitions orders to paid + calls onPaid once
+// Manage payment orders and their settlement lifecycle.
+const { randomUUID } = require('node:crypto');
+const { xmrToPico, picoToXmrString } = require('./verify');
+const { toInvoiceState } = require('./state');
 
-const { xmrToPico, picoToXmrString } = require('./verify');   // pure parser; does NOT load monero-ts
-const { toInvoiceState } = require('./state');   // canonical lifecycle (created/processing/settled/expired/invalid)
-
-// adaptive polling: when a buyer is actively paying we want to detect in seconds,
-// but idle-polling that fast wastes node calls. so the loop runs at `activePollMs`
-// while there's an unpaid order inside its checkout window (or an `activeHint`
-// signal — e.g. an open SSE stream), and falls back to `pollMs` when idle. set
-// activePollMs >= pollMs (the default) to disable adaptivity (fixed cadence).
 function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 15000, activePollMs = 15000, activeWindowMs = 1800000, activeHint, onPaid, onUpdate, onExpire, idgen, subaddressPool = 0, poolLabel = '', expiryMs = 0, paidRetentionMs = 0, toleranceXmr = '0', now = Date.now } = {}) {
     if (!scanner || typeof scanner.checkOrder !== 'function' || typeof scanner.newSubaddress !== 'function') {
         throw new Error('a scanner with newSubaddress() and checkOrder() is required');
     }
     const orders = store || new Map();
-    const reserving = new Set();   // ids in-flight (created but not yet stored) — closes the create-order TOCTOU
-    // every subaddress index EVER bound to an order. a Monero subaddress must back
-    // AT MOST ONE order: if two orders shared an index, a single payment to it
-    // would credit BOTH (double-credit — the merchant ships twice for one payment).
-    // this set is the guard. it's rebuilt from the store on boot and only GROWS —
-    // a used index is never reassigned, even after its order is paid/expired, so a
-    // late payment to an old subaddress can't credit a fresh order.
+    const reserving = new Set();
+
     const usedIndexes = new Set();
     for (const o of orders.values()) { if (o && o.index != null) usedIndexes.add(o.index); }
-    let counter = 0;
-    const nextId = idgen || (() => `ord_${(++counter).toString(36)}`);
+    const nextId = idgen || (() => `ord_${randomUUID()}`);
 
-    // OPTIONAL pre-warmed subaddress pool. createSubaddress() is slow while a
-    // wallet sync holds the lock, so an order created mid-sync can stall for
-    // seconds. pre-creating subaddresses (before the poller starts, and topping
-    // up in the background) makes createOrder instant. each entry keeps its
-    // birthday height, so the order/birthday binding is preserved.
     const pool = [];
     let filling = false;
     const poolFloor = Math.max(2, Math.ceil(subaddressPool / 4));
@@ -46,91 +21,71 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         if (filling || n <= 0) return;
         filling = true;
         try { for (let i = 0; i < n; i++) { const s = await scanner.newSubaddress(poolLabel); pool.push({ address: s.address, index: s.index, atHeight: s.atHeight }); } }
-        catch { /* node busy — top up on the next createOrder/tick */ }
+        catch {   }
         finally { filling = false; }
     }
 
-    // create an order: derive a fresh per-order subaddress (or bind a given index),
-    // record the amount + birthday height. hand `address` to the buyer.
     async function createOrder({ amount, id, index, label } = {}) {
+        if (id != null && !((typeof id === 'string' && id.length > 0 && id.length <= 2048) || (Number.isSafeInteger(id) && id >= 0))) throw new Error('invalid order id');
+        if (index != null && (!Number.isSafeInteger(index) || index < 0)) throw new Error('invalid subaddress index');
+        if (label != null && (typeof label !== 'string' || label.length > 256)) throw new Error('invalid order label');
         if (amount == null || amount === '') throw new Error('amount is required');
-        // validate the amount BEFORE allocating a subaddress: a bad value would
-        // otherwise waste a pool entry and wedge the poller (it throws every tick),
-        // and amount "0" would summarize as instantly-paid (0 >= 0) with no funds.
+
         let expectedPico;
         try { expectedPico = xmrToPico(amount); }
         catch { throw new Error(`amount is not a valid XMR value: ${amount}`); }
         if (expectedPico <= 0n) throw new Error('amount must be greater than 0');
-        const oid = id || nextId();
-        // reject duplicates AND reserve the id BEFORE any await — otherwise two
-        // concurrent createOrder calls with the same id both pass the has() check
-        // and both allocate a subaddress (the order would point at only the last).
+        const oid = id ?? nextId();
+
         if (orders.has(oid) || reserving.has(oid)) throw new Error(`order ${oid} already exists`);
         reserving.add(oid);
         try {
             let address, idx, birthdayHeight = null;
             if (index != null) {
-                // explicit bind: refuse an index already held by another order —
-                // reusing it would let one payment settle two orders. RESERVE it
-                // synchronously (before any await) so two concurrent binds of the
-                // same index can't both pass the check (a check-then-act TOCTOU).
+
                 if (usedIndexes.has(index)) throw new Error(`subaddress index ${index} is already assigned to another order`);
                 usedIndexes.add(index);
                 idx = index;
                 try { address = await scanner.addressAt(index); }
-                catch (e) { usedIndexes.delete(index); throw e; }   // roll back the reservation if the lookup fails
+                catch (e) { usedIndexes.delete(index); throw e; }
             } else {
-                // take a FRESH subaddress (pool if warm, else create one), skipping
-                // any candidate whose index is already in use — defends against a
-                // pool/wallet-counter collision (e.g. a lost wallet cache re-issuing
-                // low indices that overlap reloaded orders). reserve each chosen
-                // index synchronously (no await between the has() check and add()).
+
                 let tries = 0;
                 while (idx == null) {
                     if (++tries > 10000) throw new Error('could not obtain an unused subaddress index');
                     let cand;
                     if (pool.length) {
                         cand = pool.shift();
-                        if (subaddressPool && pool.length < poolFloor) fillPool(subaddressPool - pool.length);   // top up in the background
+                        if (subaddressPool && pool.length < poolFloor) fillPool(subaddressPool - pool.length);
                     } else {
                         cand = await scanner.newSubaddress(label || oid);
                     }
                     if (!usedIndexes.has(cand.index)) { usedIndexes.add(cand.index); idx = cand.index; address = cand.address; birthdayHeight = cand.atHeight; }
-                    // else: collision → discard this candidate and take the next
+
                 }
             }
-            // store the CANONICAL amount (≤12-decimal string from the validated pico), never the
-            // raw input: a float like 0.1+0.2 stringifies to "0.30000000000000004", which passes
-            // the number-path validation above but would then THROW in checkOrder's xmrToPico
-            // (string path, >12 decimals) and brick settlement for this order — and the tick.
+
             const amountStr = picoToXmrString(expectedPico);
             const order = { id: oid, amount: amountStr, address, index: idx, birthdayHeight, createdAt: now(), status: 'pending', state: 'created', paid: false, receivedXmr: 0, shortfallXmr: amountStr, txids: [] };
             orders.set(oid, order);
-            kick();   // a fresh order means a buyer is about to pay — pull the next poll in
+            kick();
             return { ...order };
         } finally {
             reserving.delete(oid);
         }
     }
 
-    // fold a check result into an order's state; fire onPaid EXACTLY ONCE on the
-    // unpaid→paid transition. shared by the single check() and the batch tick().
     function applyResult(order, r) {
         const wasPaid = order.paid;
-        // settled LATCHES: once an order is paid, a later re-check (reachable only via check();
-        // the poller skips paid orders) must never un-capture it. A reorg deeper than
-        // minConfirmations is the merchant's bounded, accepted risk — refresh the confirmation
-        // count but keep the settled state + paid flag. (Mirrors docs/EVENTS.md "settled latches".)
+
         if (wasPaid && !r.paid) {
             if (r.confirmations != null) order.confirmations = r.confirmations;
             const kept = { ...order };
-            if (onUpdate) { try { onUpdate(kept); } catch { /* ignore */ } }
+            if (onUpdate) { try { onUpdate(kept); } catch {   } }
             return kept;
         }
         order.status = r.status;
-        // fold the settlement status into the canonical invoice state (keep the prior state
-        // for verify-only results that don't map to a transition). `status` is kept for
-        // backward compat; `state` is the canonical lifecycle the events + UI key on.
+
         const nextState = toInvoiceState(r.status);
         if (nextState) order.state = nextState;
         order.paid = r.paid;
@@ -143,12 +98,12 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         order.overpaidXmr = r.overpaidXmr != null ? r.overpaidXmr : '0';
         order.confirmations = r.confirmations;
         order.txids = r.txids;
-        if (r.paid && !wasPaid) order.paidAt = now();   // stamp settlement (for the retention sweep)
+        if (r.paid && !wasPaid) order.paidAt = now();
         const result = { ...order };
         if (r.paid && !wasPaid) {
-            // fire without awaiting so a slow webhook delivery never stalls the poll.
+
             if (onPaid) { Promise.resolve().then(() => onPaid(result)).catch(() => {}); }
-        } else if (onUpdate) { try { onUpdate(result); } catch { /* ignore */ } }
+        } else if (onUpdate) { try { onUpdate(result); } catch {   } }
         return result;
     }
 
@@ -159,79 +114,55 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         return applyResult(order, r);
     }
 
-    // poll: sync ONCE per tick, sweep expiry/retention, then check ALL pending
-    // orders in ONE batch getTransfers — O(1) wallet queries per poll, not O(orders).
-    // (the old path did one getTransfers PER order: 1000 pending orders → 1000
-    // queries/tick → detection latency grew linearly. now 1000 orders = 1 query.)
     async function tick() {
         if (typeof scanner.sync === 'function') {
-            try { await scanner.sync(); } catch { return; }   // node down — skip this tick, keep state
+            try { await scanner.sync(); } catch { return; }
         }
         const nowMs = (expiryMs > 0 || paidRetentionMs > 0) ? now() : 0;
         const toCheck = [];
+        const checked = new Set();
         for (const order of orders.values()) {
-            // LATCH: a settled order is never re-checked. minConfirmations is the
-            // reorg defence — an order only settles once its payment is that deep,
-            // so a reorg shallower than minConfirmations can't falsely complete it
-            // (the pre-settlement path re-evaluates every tick). a reorg DEEPER
-            // than minConfirmations after settlement is the merchant's accepted
-            // risk, bounded by minConfirmations — we don't un-capture a sale. set
-            // minConfirmations to your value-at-risk. (see docs/AGENT.md → reorgs)
+
             if (order.paid) {
-                // RETENTION: a settled order's work is done (onPaid already fired,
-                // the store/webhook holds the record). keeping it forever leaks
-                // memory + bloats every ledger save. drop it once it's older than
-                // paidRetentionMs. 0 = keep forever (default). GET /order|/receipt
-                // 404s after this, so set it well past your buyers' poll window.
-                if (paidRetentionMs > 0 && order.paidAt != null && (nowMs - order.paidAt) >= paidRetentionMs) {
+
+                if (order.webhookDelivered !== false && paidRetentionMs > 0 && order.paidAt != null && (nowMs - order.paidAt) >= paidRetentionMs) {
                     orders.delete(order.id);
                 }
                 continue;
             }
-            toCheck.push(order);   // collect EVERY unpaid order; checked in ONE batch below
+            toCheck.push(order);
         }
         if (toCheck.length === 0) return;
-        // ONE account-wide getTransfers, distributed across every pending order.
+
         if (typeof scanner.checkOrders === 'function') {
             let results;
             try { results = await scanner.checkOrders(toCheck.map(o => ({ id: o.id, index: o.index, amount: o.amount, birthdayHeight: o.birthdayHeight })), { minConfirmations, toleranceXmr, sync: false }); }
-            catch { return; }   // transient; keep state, retry next tick
-            for (const order of toCheck) { const r = results.get(order.id); if (r) applyResult(order, r); }
+            catch { return; }
+            for (const order of toCheck) { const r = results.get(order.id); if (r) { applyResult(order, r); checked.add(order.id); } }
         } else {
-            // fallback for a scanner without batch support (e.g. a test mock): per-order
-            for (const order of toCheck) { try { await check(order.id, { sync: false }); } catch { /* transient */ } }
+
+            for (const order of toCheck) { try { await check(order.id, { sync: false }); checked.add(order.id); } catch {   } }
         }
-        // EXPIRY runs AFTER the check, on FRESH state. drop a still-unpaid order
-        // once it's older than expiryMs — this bounds per-tick work and memory
-        // (abandoned orders don't accumulate forever). a late payment to an expired
-        // order still lands on-chain in YOUR wallet; it just won't auto-complete
-        // (reconcile via onExpire). off by default.
-        // NEVER expire an order that already RECEIVED funds (a partial payment):
-        // dropping it would orphan a top-up and lose the buyer's money on a vanished
-        // order. checking BEFORE expiring is what makes this airtight — a payment
-        // that landed in this very tick's window is now recorded, so an order with
-        // funds on-chain can never be expired (the race that orphaned it is gone).
-        // the principle both MoneroPay (never auto-deletes) and BTCPay (preserves the
-        // payment record past expiry) hold to: a payment is never orphaned.
+
         if (expiryMs > 0) {
             for (const order of toCheck) {
-                if (order.paid) continue;   // settled by the check above
-                const hasFunds = Number(order.receivedXmr) > 0 || (order.receivedPico != null && BigInt(order.receivedPico) > 0n);
+                if (order.paid || !checked.has(order.id)) continue;
+                const hasFunds = Number(order.receivedXmr) > 0 || Number(order.pendingXmr) > 0 || Number(order.lockedXmr) > 0 || (order.receivedPico != null && BigInt(order.receivedPico) > 0n);
                 if (order.createdAt != null && (nowMs - order.createdAt) >= expiryMs && !hasFunds) {
                     order.status = 'expired';
                     order.state = 'expired';
                     orders.delete(order.id);
-                    if (onExpire) { try { await onExpire({ ...order }); } catch { /* caller's job */ } }
+                    if (onExpire) { try { await onExpire({ ...order }); } catch {   } }
                 }
             }
         }
     }
 
     let timer = null, running = false, ticking = false;
-    // how long until the next poll: fast while a buyer is actively paying, slow when idle.
+
     function nextDelay() {
-        if (activePollMs >= pollMs) return pollMs;   // adaptivity disabled
-        if (typeof activeHint === 'function') { try { if (activeHint()) return activePollMs; } catch { /* ignore */ } }
+        if (activePollMs >= pollMs) return pollMs;
+        if (typeof activeHint === 'function') { try { if (activeHint()) return activePollMs; } catch {   } }
         const t = now();
         for (const o of orders.values()) {
             if (!o.paid && o.createdAt != null && (t - o.createdAt) < activeWindowMs) return activePollMs;
@@ -239,9 +170,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         return pollMs;
     }
     function schedule(ms) { if (timer) clearTimeout(timer); timer = setTimeout(loop, ms); if (timer.unref) timer.unref(); }
-    // pull the next poll in NOW (capped) — e.g. a new order arrived or a stream opened.
-    // no-op while a tick is in flight (its tail reschedules via nextDelay anyway), so
-    // there is never more than one pending timer.
+
     function kick() { if (!running || ticking) return; schedule(Math.min(activePollMs, 1500)); }
     async function loop() {
         if (!running) return;
@@ -252,7 +181,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
     function start() {
         if (running) return;
         running = true;
-        if (subaddressPool > 0) fillPool(subaddressPool);   // pre-warm BEFORE the first sync holds the wallet lock
+        if (subaddressPool > 0) fillPool(subaddressPool);
         schedule(nextDelay());
     }
     function stop() { running = false; if (timer) { clearTimeout(timer); timer = null; } }
@@ -264,7 +193,7 @@ function createPaymentAgent({ scanner, store, minConfirmations = 1, pollMs = 150
         get: (id) => { const o = orders.get(id); return o ? { ...o } : null; },
         list: () => [...orders.values()].map(o => ({ ...o })),
         poolReady: () => pool.length,
-        kick,   // pull the next poll in now (e.g. a buyer just opened the checkout stream)
+        kick,
         start,
         stop,
     };

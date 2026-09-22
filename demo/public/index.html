@@ -68,15 +68,15 @@
   </div></header>
 
   <section class="intro"><div class="wrap">
-    <span class="lbl">// one library + one function you host — no account, no third party</span>
+    <span class="lbl">// one library + one function you host: no account, no third party</span>
     <h1>Configure it. Pay it. On-chain.</h1>
     <p>Tweak the checkout widget below and watch it rebuild live. Flip on <b>live verify</b> and pay the demo
-       order on <b>stagenet</b> — the buyer's proof is checked against real Monero nodes by a function running on
+       order on <b>stagenet</b>: the buyer's proof is checked against real Monero nodes by a function running on
        this very deploy. Copy the snippet and it's yours.</p>
   </div></section>
 
   <section class="builder"><div class="wrap">
-    <span class="lbl">// the preview is a real &lt;xmr-pay&gt; widget — it rebuilds as you change things</span>
+    <span class="lbl">// the preview is a real &lt;xmr-pay&gt; widget: it rebuilds as you change things</span>
     <h2 class="sec">Build your widget</h2>
     <div class="bgrid">
       <div class="controls">
@@ -100,9 +100,9 @@
 
       <div class="preview">
         <div id="c-mount"></div>
-        <button class="try ghost" id="c-try" style="display:none;margin-top:14px">▶ Try it — pay &amp; verify on stagenet</button>
+        <button class="try ghost" id="c-try" style="display:none;margin-top:14px">▶ Try it: pay &amp; verify on stagenet</button>
         <div class="snippet">
-          <span class="lbl">// copy-paste — self-hosted, no build step</span>
+          <span class="lbl">// copy-paste: self-hosted, no build step</span>
           <pre id="c-code" class="mono"></pre>
           <button class="try" id="c-copy">copy snippet</button>
         </div>
@@ -112,7 +112,7 @@
 
   <div class="wrap"><div class="row2">
     <section class="col">
-      <h2 class="sec" style="font-size:14px">Tips — mainnet, no backend</h2>
+      <h2 class="sec" style="font-size:14px">Tips: mainnet, no backend</h2>
       <p>Drop the address, no <code class="mono">verify-url</code>, nothing running. Just a QR + address.</p>
       <div style="margin-top:22px">
         <xmr-pay
@@ -126,7 +126,7 @@
       <p class="note" style="border:0;padding:0;margin-top:14px">
         The buyer pays the address, then pastes the wallet's <code>txid</code> + <code>tx proof</code>.
         The widget POSTs them to <code>/api/verify-payment</code> on this deploy, which checks the proof
-        against stagenet nodes — confirms the amount, the recipient and the confirmations — and reports
+        against stagenet nodes: confirms the amount, the recipient and the confirmations: and reports
         back. No private keys leave your wallet; the verifier holds none. First call loads a Monero WASM
         wallet (~20s cold start); after that it's quick.
       </p>

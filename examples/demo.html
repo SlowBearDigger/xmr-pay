@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>xmr-pay widget — demo (stagenet)</title>
+<title>xmr-pay widget: demo (stagenet)</title>
 <style>
   body { margin:0; background:#0b0b0d; color:#fafafa; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; }
   .wrap { max-width:1320px; margin:0 auto; padding:32px 22px 64px; }
@@ -18,14 +18,14 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>&lt;xmr-pay&gt; — sovereign checkout widget</h1>
+  <h1>&lt;xmr-pay&gt;: Monero checkout widget</h1>
   <p class="sub">one self-hosted file · <b>zero CDN, zero third parties</b> · QR generated locally ·
      verification against <b>the merchant's own endpoint</b> (live stagenet here) ·
      two skins: <code>clean</code> (default, universal) and <code>skin="brutal"</code> (GOXMR).</p>
 
   <div class="grid">
     <section>
-      <h2>Clean skin (default) — store, live verify</h2>
+      <h2>Clean skin (default): store, live verify</h2>
       <xmr-pay
         address="{{SUB}}"
         amount="0.1"
@@ -33,11 +33,11 @@
         order="ord_demo"
         verify-url="/api/verify-payment"></xmr-pay>
       <p class="note">universal look: system sans, rounded, soft shadow. order <code>ord_demo</code> expects the
-         real 0.1 XMR faucet payment on stagenet — paste txid + proof under "prove it".</p>
+         real 0.1 XMR faucet payment on stagenet: paste txid + proof under "prove it".</p>
     </section>
 
     <section>
-      <h2>Clean skin — tips, light, no backend</h2>
+      <h2>Clean skin: tips, light, no backend</h2>
       <xmr-pay
         theme="light"
         address="{{PRIMARY}}"
@@ -47,7 +47,7 @@
     </section>
 
     <section>
-      <h2>Brutal skin (GOXMR) — replay defense demo</h2>
+      <h2>Brutal skin (GOXMR): replay defense demo</h2>
       <xmr-pay
         skin="brutal"
         lang="es"
@@ -62,7 +62,7 @@
     </section>
 
     <section>
-      <h2>Signed config — tamper-evident address</h2>
+      <h2>Signed config: tamper-evident address</h2>
       <xmr-pay config="{{SIGNED}}" order="ord_demo3" verify-url="/api/verify-payment"></xmr-pay>
       <p class="note">address + amount come from a config signed with a key kept off the page.
          expand the trust panel to see <code>Signed · {{FP}}</code>. a buyer who knows that
@@ -70,7 +70,7 @@
     </section>
 
     <section>
-      <h2>Signed config — TAMPERED (address swapped after signing)</h2>
+      <h2>Signed config: TAMPERED (address swapped after signing)</h2>
       <xmr-pay config="{{SIGNED_BAD}}"></xmr-pay>
       <p class="note">same envelope, address swapped after signing → the signature no longer matches,
          so the widget refuses to show a payable address and warns instead.</p>
