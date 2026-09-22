@@ -62,7 +62,7 @@ function atomicToPico(v) {
     if (typeof v === 'number') {
         if (!Number.isInteger(v)) throw new Error(`non-integer atomic amount: ${v}`);
 
-        if (!Number.isSafeInteger(v)) throw new Error(`atomic amount ${v} exceeds JS safe-integer precision — pass it as a string or BigInt`);
+        if (!Number.isSafeInteger(v)) throw new Error(`atomic amount ${v} exceeds JS safe-integer precision: pass it as a string or BigInt`);
         return BigInt(v);
     }
 
@@ -246,7 +246,7 @@ async function verifyPayment(opts) {
         alreadyUsed = null,
     } = opts || {};
 
-    if (skipUnlockTimeCheck) warnOnce('skipUnlockTimeCheck is on — time-locked (unspendable) payments will be accepted as paid. leave it off unless you know exactly why.');
+    if (skipUnlockTimeCheck) warnOnce('skipUnlockTimeCheck is on: time-locked (unspendable) payments will be accepted as paid. leave it off unless you know exactly why.');
 
     const id = String(txid == null ? '' : txid).trim().toLowerCase();
 
@@ -298,7 +298,7 @@ async function verifyPayment(opts) {
     const { head, agreed } = resolveQuorum(answers, want);
     if (!agreed) {
         return fail('node-disagreement',
-            'nodes returned different results — verify against different nodes',
+            'nodes returned different results: verify against different nodes',
             { detail: answers.map(a => ({ node: a.nodeUri, isGood: a.isGood, receivedXmr: picoToXmr(a.receivedPico) })) });
     }
 
@@ -316,7 +316,7 @@ async function verifyPayment(opts) {
     if (!skipUnlockTimeCheck) {
         const unlockTime = await fetchUnlockTime(nodes, id, want);
         if (unlockTime === null) {
-            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — nodes did not return the tx or disagreed; not marking paid (add nodes or retry)', ...base };
+            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time: nodes did not return the tx or disagreed; not marking paid (add nodes or retry)', ...base };
         }
         if (unlockTime !== 0n) {
 
@@ -329,7 +329,7 @@ async function verifyPayment(opts) {
                 elapsed = tip !== null && tip >= unlockTime;
             }
             if (!elapsed) {
-                return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable yet, not accepted`, ...base };
+                return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}): not spendable yet, not accepted`, ...base };
             }
         }
     }

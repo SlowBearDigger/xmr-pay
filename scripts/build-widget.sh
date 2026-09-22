@@ -3,14 +3,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-QR="${QRCODE_SRC:-src/vendor/qrcode-generator.js}"   # vendored in-repo — zero npm deps, always present
+QR="${QRCODE_SRC:-src/vendor/qrcode-generator.js}"
 [ -f "$QR" ] || { echo "missing $QR"; exit 1; }
-VER="1.5.2"   # vendored qrcode-generator version (src/vendor) — bump when the vendored file is updated
+VER="1.5.2"   # Keep this attribution version aligned with the vendored source.
 
 OUT=widget/xmr-pay.js
 {
-  echo "/*! <xmr-pay> — sovereign Monero checkout widget. one self-hosted file: no CDN, no third-party requests, QR generated locally."
-  echo " * bundles qrcode-generator@${VER} (c) Kazuhiko Arase, MIT — https://github.com/kazuhikoarase/qrcode-generator */"
+  echo "/*! <xmr-pay>: Monero checkout widget with locally generated QR codes."
+  echo " * bundles qrcode-generator@${VER} (c) Kazuhiko Arase, MIT: https://github.com/kazuhikoarase/qrcode-generator */"
   echo "(function(){"
   cat "$QR"
   echo ""

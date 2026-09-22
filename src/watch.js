@@ -217,7 +217,7 @@ async function verifyPaymentViaRpc(opts) {
     if (!skipUnlockTimeCheck) {
         const unlockTime = await unlockTimeViaRpc(url, id, nodes, timeoutMs);
         if (unlockTime === null) {
-            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time — the wallet has no record of this tx and no daemon nodes were given; pass `nodes` or set skipUnlockTimeCheck', ...base };
+            return { paid: false, status: 'invalid', reason: 'could not verify unlock_time: the wallet has no record of this tx and no daemon nodes were given; pass `nodes` or set skipUnlockTimeCheck', ...base };
         }
         if (unlockTime !== 0n) {
 
@@ -232,7 +232,7 @@ async function verifyPaymentViaRpc(opts) {
                 elapsed = tip !== null && tip >= unlockTime;
             }
             if (!elapsed) {
-                return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}) — not spendable yet, not accepted`, ...base };
+                return { paid: false, status: 'locked', reason: `outputs are time-locked (unlock_time=${unlockTime}): not spendable yet, not accepted`, ...base };
             }
         }
     }

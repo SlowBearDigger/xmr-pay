@@ -73,7 +73,7 @@ async function createScanner({ primaryAddress, privateViewKey, networkType = 'ma
     let birthday = restoreHeight;
     if (!opening && birthday == null) {
         birthday = await fetchDaemonHeight(normalizedNodes);
-        if (birthday == null) throw new Error('could not read the chain tip to start at "now" — pass restoreHeight, or check your nodes');
+        if (birthday == null) throw new Error('could not read the chain tip to start at "now": pass restoreHeight, or check your nodes');
     }
 
     let wallet;

@@ -90,7 +90,7 @@ async function verifyReceiptOnChain(envelope, { nodes, networkType, minConfirmat
     const r = sig.receipt;
     const proofs = Array.isArray(r.txProofs) ? r.txProofs : [];
     if (!proofs.length) {
-        return { valid: false, reason: 'receipt carries no tx_proofs — only the offline merchant signature can be checked', confirmedPico: '0', needPico: r.amountPico, perTx: [] };
+        return { valid: false, reason: 'receipt carries no tx_proofs: only the offline merchant signature can be checked', confirmedPico: '0', needPico: r.amountPico, perTx: [] };
     }
     if (!Array.isArray(nodes) || nodes.length === 0) {
         return { valid: false, reason: 'at least one node URI is required for on-chain verification', confirmedPico: '0', needPico: r.amountPico, perTx: [] };

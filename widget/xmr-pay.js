@@ -1,5 +1,5 @@
-/*! <xmr-pay> — sovereign Monero checkout widget. one self-hosted file: no CDN, no third-party requests, QR generated locally.
- * bundles qrcode-generator@1.5.2 (c) Kazuhiko Arase, MIT — https://github.com/kazuhikoarase/qrcode-generator */
+/*! <xmr-pay>: Monero checkout widget with locally generated QR codes.
+ * bundles qrcode-generator@1.5.2 (c) Kazuhiko Arase, MIT: https://github.com/kazuhikoarase/qrcode-generator */
 (function(){
 //---------------------------------------------------------------------
 //
@@ -2303,75 +2303,75 @@ var qrcode = function() {
 var XP_STR = {
     en: {
         sendExactly: 'Send exactly', anyAmount: 'Send any amount', awaiting: 'Awaiting payment', scanToSend: 'Scan or tap to send',
-        addrLabel: 'Payment address — click to copy', copied: 'Copied ✓', openWallet: 'Open in wallet',
+        addrLabel: 'Payment address (click to copy)', copied: 'Copied ✓', copyFail: 'Copy failed, select the address manually', openWallet: 'Open in wallet',
         trustToggle: 'Non-custodial · verify this payment',
-        trustFunds: 'Funds go directly to the merchant’s wallet — this page never holds your money.',
-        trustAddr: 'Check the address — it must start and end with:',
+        trustFunds: 'Funds go directly to the merchant’s wallet. This page never holds your money.',
+        trustAddr: 'Check the address. It must start and end with:',
         trustAddrHint: 'Copy it and confirm with the merchant for large payments.',
-        trustLink: 'Check the link — you are on',
+        trustLink: 'Check the link. You are on',
         proveToggle: 'Paid but still waiting? Prove it',
         txidPh: 'Transaction ID (txid)', proofPh: 'Tx key or payment proof',
-        proofHint: 'Feather: History → right-click the tx → Create tx proof. GUI: open the tx → “P”. Cake/Monerujo: tx details → transaction key. Paste it all in either box — txid and proof sort themselves out. Tip: a payment to this address is best proven with the tx PROOF.',
-        verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard — paste manually',
-        detectBtn: "I've paid — detect it", detecting: 'Checking the blockchain…', watching: 'Watching the blockchain for your payment…',
+        proofHint: 'Feather: History → right-click the tx → Create tx proof. GUI: open the tx → “P”. Cake/Monerujo: tx details → transaction key. Paste it all in either box: txid and proof sort themselves out. Tip: a payment to this address is best proven with the tx PROOF.',
+        verifyBtn: 'Verify payment', verifying: 'Verifying on-chain…', pasteBtn: 'Paste', pasteFail: 'Could not read the clipboard: paste manually',
+        detectBtn: "I've paid: detect payment", detecting: 'Checking the blockchain…', watching: 'Watching the blockchain for your payment…',
         paidTitle: 'Payment confirmed', confs: 'confirmations',
         stepAwait: 'Awaiting', stepSeen: 'Received', stepDone: 'Confirmed',
-        overpaidMsg: 'You overpaid {x} XMR — contact the merchant for a refund of the difference.',
+        overpaidMsg: 'You overpaid {x} XMR: contact the merchant for a refund of the difference.',
         receiptSigner: 'Signed by', receiptDownload: 'Download receipt', receiptVerify: 'Verify receipt',
         underpaid: 'Received {r} XMR, expected {e}',
-        topupMsg: 'Detected {r} XMR — send {s} more to complete',
+        topupMsg: 'Detected {r} XMR: send {s} more to complete',
         topupTitle: 'Scan to send the difference',
-        mempool: '✓ Payment received — confirming…',
-        unconfirmed: 'Not confirmed yet — try again in a minute',
-        confirming: '✓ Payment received — confirming ({c})…',
+        mempool: '✓ Payment received: confirming…',
+        unconfirmed: 'Not confirmed yet: try again in a minute',
+        confirming: '✓ Payment received: confirming ({c})…',
         replay: 'This transaction already paid another order',
-        invalid: 'We couldn’t match this to your payment — check the transaction ID and proof are for THIS order',
-        badTxid: 'That transaction ID looks off — it should be 64 characters. Copy the whole thing from your wallet',
-        badProof: 'That doesn’t look like a payment proof — paste the tx key (64 chars) or the proof block (OutProof…/InProof…) from your wallet',
+        invalid: 'We couldn’t match this to your payment: check the transaction ID and proof are for THIS order',
+        badTxid: 'That transaction ID looks off: it should be 64 characters. Copy the whole thing from your wallet',
+        badProof: 'That doesn’t look like a payment proof: paste the tx key (64 chars) or the proof block (OutProof…/InProof…) from your wallet',
         'no-funds': 'This transaction sent nothing to this address',
-        'node-disagreement': 'Nodes disagreed — try again',
-        'node-error': 'Nodes are unavailable — try again in a moment',
-        locked: 'Funds are time-locked — payment not accepted',
-        netErr: 'Network error — try again',
-        foot: 'Non-custodial — funds go directly to the merchant.',
-        signedBy: 'Signed · {fp}', unsigned: 'Unsigned — verify the address with the merchant',
+        'node-disagreement': 'Nodes disagreed: try again',
+        'node-error': 'Nodes are unavailable: try again in a moment',
+        locked: 'Funds are time-locked: payment not accepted',
+        netErr: 'Network error: try again',
+        foot: 'Non-custodial: funds go directly to the merchant.',
+        signedBy: 'Signed · {fp}', unsigned: 'Unsigned: verify the address with the merchant',
         badTitle: 'Signature check failed', badBody: 'This payment claims to be signed but the signature does not match. Do not pay. Contact the merchant.',
         disclaimer: 'Verify the address before sending. Monero payments are final and cannot be reversed. This widget is provided as-is, with no warranty.',
     },
     es: {
         sendExactly: 'Envía exactamente', anyAmount: 'Envía cualquier cantidad', awaiting: 'Esperando pago', scanToSend: 'Escanea o toca para enviar',
-        addrLabel: 'Dirección de pago — clic para copiar', copied: 'Copiada ✓', openWallet: 'Abrir en wallet',
+        addrLabel: 'Dirección de pago (clic para copiar)', copied: 'Copiada ✓', copyFail: 'No se pudo copiar, selecciona la dirección manualmente', openWallet: 'Abrir en wallet',
         trustToggle: 'No-custodial · verifica este pago',
-        trustFunds: 'Los fondos van directo a la wallet del comerciante — esta página nunca toca tu dinero.',
-        trustAddr: 'Comprueba la dirección — debe empezar y terminar con:',
+        trustFunds: 'Los fondos van directo a la wallet del comerciante. Esta página no custodia tus fondos.',
+        trustAddr: 'Comprueba la dirección. Debe empezar y terminar con:',
         trustAddrHint: 'Cópiala y confírmala con el comerciante en pagos grandes.',
-        trustLink: 'Comprueba el enlace — estás en',
+        trustLink: 'Comprueba el enlace. Estás en',
         proveToggle: '¿Pagaste y sigue esperando? Demuéstralo',
         txidPh: 'ID de transacción (txid)', proofPh: 'Tx key o prueba de pago',
-        proofHint: 'Feather: History → clic derecho en la tx → Create tx proof. GUI: abre la tx → “P”. Cake/Monerujo: detalles de la tx → transaction key. Pega todo en cualquier caja — txid y prueba se acomodan solos. Tip: un pago a esta dirección se prueba mejor con la tx PROOF.',
-        verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles — pega a mano',
-        detectBtn: 'Ya pagué — detectar', detecting: 'Revisando la blockchain…', watching: 'Esperando tu pago en la blockchain…',
+        proofHint: 'Feather: History → clic derecho en la tx → Create tx proof. GUI: abre la tx → “P”. Cake/Monerujo: detalles de la tx → transaction key. Pega todo en cualquier caja: txid y prueba se acomodan solos. Tip: un pago a esta dirección se prueba mejor con la tx PROOF.',
+        verifyBtn: 'Verificar pago', verifying: 'Verificando en cadena…', pasteBtn: 'Pegar', pasteFail: 'No se pudo leer el portapapeles: pega a mano',
+        detectBtn: 'Ya pagué: detectar pago', detecting: 'Revisando la blockchain…', watching: 'Esperando tu pago en la blockchain…',
         paidTitle: 'Pago confirmado', confs: 'confirmaciones',
         stepAwait: 'En espera', stepSeen: 'Recibido', stepDone: 'Confirmado',
-        overpaidMsg: 'Pagaste {x} XMR de más — contacta al comerciante para el reembolso de la diferencia.',
+        overpaidMsg: 'Pagaste {x} XMR de más: contacta al comerciante para el reembolso de la diferencia.',
         receiptSigner: 'Firmado por', receiptDownload: 'Descargar recibo', receiptVerify: 'Verificar recibo',
         underpaid: 'Se recibió {r} XMR, se esperaban {e}',
-        topupMsg: 'Detectado {r} XMR — envía {s} más para completar',
+        topupMsg: 'Detectado {r} XMR: envía {s} más para completar',
         topupTitle: 'Escanea para enviar la diferencia',
-        mempool: '✓ Pago recibido — confirmando…',
-        unconfirmed: 'Aún sin confirmar — prueba en un minuto',
-        confirming: '✓ Pago recibido — confirmando ({c})…',
+        mempool: '✓ Pago recibido: confirmando…',
+        unconfirmed: 'Aún sin confirmar: prueba en un minuto',
+        confirming: '✓ Pago recibido: confirmando ({c})…',
         replay: 'Esta transacción ya pagó otra orden',
-        invalid: 'No pudimos relacionarlo con tu pago — revisa que el ID de transacción y la prueba sean de ESTA orden',
-        badTxid: 'Ese ID de transacción no cuadra — debe tener 64 caracteres. Copia el completo desde tu wallet',
-        badProof: 'Eso no parece una prueba de pago — pega la tx key (64 caracteres) o el bloque (OutProof…/InProof…) de tu wallet',
+        invalid: 'No pudimos relacionarlo con tu pago: revisa que el ID de transacción y la prueba sean de ESTA orden',
+        badTxid: 'Ese ID de transacción no cuadra: debe tener 64 caracteres. Copia el completo desde tu wallet',
+        badProof: 'Eso no parece una prueba de pago: pega la tx key (64 caracteres) o el bloque (OutProof…/InProof…) de tu wallet',
         'no-funds': 'Esta transacción no envió nada a esta dirección',
-        'node-disagreement': 'Los nodos no coinciden — reintenta',
-        'node-error': 'Nodos no disponibles — reintenta en un momento',
-        locked: 'Los fondos están bloqueados en el tiempo — pago no aceptado',
-        netErr: 'Error de red — reintenta',
-        foot: 'No-custodial — los fondos van directo al comerciante.',
-        signedBy: 'Firmado · {fp}', unsigned: 'Sin firmar — verifica la dirección con el comerciante',
+        'node-disagreement': 'Los nodos no coinciden: reintenta',
+        'node-error': 'Nodos no disponibles: reintenta en un momento',
+        locked: 'Los fondos están bloqueados en el tiempo: pago no aceptado',
+        netErr: 'Error de red: reintenta',
+        foot: 'No-custodial: los fondos van directo al comerciante.',
+        signedBy: 'Firmado · {fp}', unsigned: 'Sin firmar: verifica la dirección con el comerciante',
         badTitle: 'Falló la verificación de firma', badBody: 'Este pago dice estar firmado pero la firma no coincide. No pagues. Contacta al comerciante.',
         disclaimer: 'Verifica la dirección antes de enviar. Los pagos en Monero son finales e irreversibles. Este widget se ofrece tal cual, sin garantía.',
     },
@@ -2511,7 +2511,7 @@ class XmrPay extends HTMLElement {
 
     connectedCallback() { this._resolve().then(() => this._render()); }
     disconnectedCallback() { this._closeStream(); clearTimeout(this._watchT); clearTimeout(this._repollT); if (this._onVis) { document.removeEventListener('visibilitychange', this._onVis); window.removeEventListener('focus', this._onVis); this._onVis = null; } }
-    _closeStream() { if (this._es) { try { this._es.close(); } catch (e) {} this._es = null; } this._streaming = false; }
+    _closeStream() { if (this._es) { try { this._es.close(); } catch {} this._es = null; } this._streaming = false; }
     attributeChangedCallback() { if (this.isConnected) this._resolve().then(() => this._render()); }
 
     async _resolve() {
@@ -2533,7 +2533,7 @@ class XmrPay extends HTMLElement {
                 try {
                     var a = xpPemToDer(pinnedPub), b = xpPemToDer(env.pubkey);
                     pinned = a.length === b.length && a.every(function (x, i) { return x === b[i]; });
-                } catch (e) { pinned = false; }
+                } catch { pinned = false; }
             } else if (pinnedFp) {
                 pinned = !!v.fingerprint && pinnedFp.replace(/[^a-f0-9]/gi, '').toLowerCase() === v.fingerprint.replace(/-/g, '');
             }
@@ -2545,7 +2545,7 @@ class XmrPay extends HTMLElement {
                 this._addr = ''; this._amount = '';
                 this._sign = { state: 'bad' };
             }
-        } catch (e) {
+        } catch {
             this._addr = ''; this._amount = '';
             this._sign = { state: 'bad' };
         }
@@ -2654,14 +2654,32 @@ class XmrPay extends HTMLElement {
     _wire(root, addr, verifyUrl, t) {
         var self = this;
         var addrBtn = root.querySelector('.addr');
+        var addressMarkup = addrBtn.innerHTML;
         addrBtn.addEventListener('click', function () {
             var done = function () {
-                var old = addrBtn.innerHTML;
                 addrBtn.textContent = t.copied;
-                setTimeout(function () { addrBtn.innerHTML = old; }, 1600);
+                setTimeout(function () { addrBtn.innerHTML = addressMarkup; }, 1600);
             };
-            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(addr).then(done, done);
-            else done();
+            var fallback = function () {
+                var field = document.createElement('textarea'), copied = false;
+                field.value = addr;
+                field.setAttribute('readonly', '');
+                field.style.position = 'fixed';
+                field.style.opacity = '0';
+                document.body.appendChild(field);
+                try {
+                    field.select();
+                    field.setSelectionRange(0, addr.length);
+                    copied = document.execCommand('copy');
+                } catch {} finally { document.body.removeChild(field); }
+                if (copied) done();
+                else addrBtn.textContent = t.copyFail + ': ' + addr;
+            };
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(addr).then(done, fallback);
+                } else fallback();
+            } catch { fallback(); }
         });
 
         root.querySelectorAll('.tgl').forEach(function (tgl) {
@@ -2758,7 +2776,7 @@ class XmrPay extends HTMLElement {
                 body: JSON.stringify({ order_id: this.getAttribute('order') || null, txid: txid, proof: proof }),
             });
             out = await r.json();
-        } catch (e) {
+        } catch {
             out = { paid: false, status: 'netErr' };
         }
         btn.disabled = false; btn.textContent = t.verifyBtn;
@@ -2788,7 +2806,7 @@ class XmrPay extends HTMLElement {
                 }
             } else {
 
-                var exp = out.expectedXmr != null ? out.expectedXmr : (this.getAttribute('amount') || '—');
+                var exp = out.expectedXmr != null ? out.expectedXmr : (this.getAttribute('amount') || '-');
                 msg = t.underpaid.replace('{r}', recv).replace('{e}', exp);
             }
         }
@@ -2808,11 +2826,11 @@ class XmrPay extends HTMLElement {
     _stream(root, streamUrl, t) {
         var self = this;
         var es;
-        try { es = new EventSource(streamUrl); } catch (e) { return; }
+        try { es = new EventSource(streamUrl); } catch { return; }
         this._es = es;
         this._streaming = true;
         es.onmessage = function (ev) {
-            var out; try { out = JSON.parse(ev.data); } catch (e) { return; }
+            var out; try { out = JSON.parse(ev.data); } catch { return; }
             self._applyWatch(root, out, t);
         };
         es.onerror = function () {   };
@@ -2828,7 +2846,7 @@ class XmrPay extends HTMLElement {
         try {
             var r = await fetch(statusUrl, { headers: { Accept: 'application/json' } });
             out = await r.json();
-        } catch (e) { out = { reachable: false }; }
+        } catch { out = { reachable: false }; }
         if (manual && btn) { btn.disabled = false; btn.textContent = t.detectBtn; }
         if (this._paidDone) return;
         this._applyWatch(root, out, t);
@@ -2912,7 +2930,7 @@ class XmrPay extends HTMLElement {
             if (!/^https?:$/.test(page.protocol)) return;
             page.hash = '';
             page = page.href;
-        } catch (e) { return; }
+        } catch { return; }
         var box  = root.querySelector('.rcpt');
         if (!url || !box) return;
 
@@ -2922,7 +2940,7 @@ class XmrPay extends HTMLElement {
                 var r = await fetch(url, { headers: { Accept: 'application/json' } });
                 if (r.ok) { env = await r.json(); break; }
                 if (r.status !== 409) return;
-            } catch (e) {   }
+            } catch {   }
             await new Promise(function (res) { setTimeout(res, 2000); });
         }
         if (!env || !env.sig || !env.receipt) return;
