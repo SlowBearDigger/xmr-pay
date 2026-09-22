@@ -32,13 +32,18 @@ Browser status and DOM events do not authorize delivery.
 - Confirmation thresholds reduce reorganisation risk. Settled orders are not
   automatically reversed if a payment later disappears from the chain.
 - Watch mode sums partial payments. Proof mode verifies one transaction at a time.
-- Expiry is disabled by default. Late or unseen payments may require manual
-  reconciliation if it is enabled.
+- The CLI wizard sets 24-hour expiry; the direct HTTP example defaults to disabled.
+  Late or unseen payments may require manual reconciliation. Review the saved config.
 - A merchant must process callbacks idempotently and persist payment records.
 
 See the [agent guide](docs/AGENT.md), [HTTP API](docs/API.md),
 [FAQ](docs/FAQ.md) and [suite components](docs/SUITE.md). Test the full checkout on
 stagenet before deploying a change. The [demo](https://demo.xmrpay.shop) uses test coins.
+
+## Release version
+
+The prepared release is **2.0.0**. [Versioning](docs/VERSIONING.md) reserves v3 for
+FCMP++ and Carrot. Follow the migration notes in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -65,9 +70,8 @@ npx xmr-pay        # setup wizard (address + view key + node), then it runs
 ```
 
 It scans from the current block (no historical rescan), generates the token and
-webhook secret, asks your settlement speed (`instant` 0-conf, `fast` 1 block,
-`secure` 10 blocks), persists its wallet and orders, and prints the exact values to
-paste into your store. `npx xmr-pay start` runs it again later.
+webhook secret, collects the confirmation setting, persists its wallet and orders,
+and prints the values to paste into your store. `npx xmr-pay start` runs it again later.
 
 ## How it works
 

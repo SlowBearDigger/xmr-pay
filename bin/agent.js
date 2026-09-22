@@ -139,7 +139,7 @@ async function askNodes(rd, defaultUrl) {
 async function wizard() {
     const rd = makeReader();
     say();
-    say('  ' + orange('xmr-pay') + dim(' — non-custodial Monero payments'));
+    say('  ' + orange('xmr-pay') + dim(': non-custodial Monero payments'));
     say(dim('  Holds only your VIEW key: it can see payments, never spend them.'));
     say(dim('  Funds go straight to your wallet. Everything stays on this machine.'));
     say();
@@ -149,7 +149,7 @@ async function wizard() {
         : network === 'testnet' ? 'http://node.monerodevs.org:28089'
             : 'http://node.monerodevs.org:18089';
     const address = await ask(rd,'Your wallet primary address', { validate: addrCheck });
-    const viewKey = await askHidden(rd,'Your private VIEW key', { hint: 'view key only — never your spend key or seed', validate: viewKeyCheck });
+    const viewKey = await askHidden(rd,'Your private VIEW key', { hint: 'view key only: never your spend key or seed', validate: viewKeyCheck });
     const nodes = await askNodes(rd, defNode);
     const merchantName = await ask(rd,'Store name (shown on receipts, optional)', { def: '' });
     const webhookUrl = await ask(rd,'Store webhook URL (blank to add later)', { def: '' });
@@ -170,7 +170,7 @@ async function wizard() {
     }
     const tip = nodeHeights.find(height => height > 0) || 0;
     const restoreHeight = tip ? Math.max(0, tip - 10) : 0;
-    say(tip ? dim(`  Scanning from block ${restoreHeight} (now) — new payments only.`)
+    say(tip ? dim(`  Scanning from block ${restoreHeight} (now): new payments only.`)
         : dim('  No configured node answered; setup will continue, but the first scan starts from genesis unless you fix a node or edit restoreHeight.'));
 
     const cfg = {
@@ -187,7 +187,7 @@ async function wizard() {
     fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2), { mode: 0o600 });
     fs.chmodSync(CONFIG, 0o600);
     say();
-    say('  ' + A.g + '✓' + A.rst + ' Saved ' + dim(CONFIG) + dim(' (holds your view key and node passwords — mode 600, keep it private)'));
+    say('  ' + A.g + '✓' + A.rst + ' Saved ' + dim(CONFIG) + dim(' (holds your view key and node passwords: mode 600, keep it private)'));
     printConnect(cfg);
     return cfg;
 }
@@ -265,7 +265,7 @@ function applyConfig(cfg, dataDir = DATA_DIR, e = process.env) {
 
 function start() {
     ensurePrivateDataDir();
-    if (!fs.existsSync(CONFIG)) { say(A.r + '  No config yet — run: ' + A.rst + orange('npx xmr-pay')); process.exit(1); }
+    if (!fs.existsSync(CONFIG)) { say(A.r + '  No config yet: run: ' + A.rst + orange('npx xmr-pay')); process.exit(1); }
     if (fs.lstatSync(CONFIG).isSymbolicLink()) throw new Error('agent config must not be a symlink');
     if (process.platform !== 'win32') fs.chmodSync(CONFIG, 0o600);
     const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
@@ -277,7 +277,7 @@ function start() {
 async function main() {
     const cmd = process.argv[2];
     if (cmd === '--help' || cmd === '-h') {
-        say('xmr-pay — one-command non-custodial Monero payment agent');
+        say('xmr-pay: one-command non-custodial Monero payment agent');
         say('  npx xmr-pay          setup wizard (first run), then start');
         say('  npx xmr-pay start    run with the saved config');
         say('  npx xmr-pay init     re-run the wizard');

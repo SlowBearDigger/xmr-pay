@@ -40,6 +40,13 @@ Show the buyer the returned subaddress and amount. Your backend checks status or
 
 ### Configuration
 
+The table lists direct-example defaults. The CLI wizard writes `expiryHours: 24`
+and `paidRetentionHours: 168` into its private `config.json`, which override the
+two corresponding environment settings on CLI start. Set either config value to
+`0` to disable that policy. Review an existing configuration before upgrading.
+The current CLI maps a saved `minConfirmations: 0` to `1`; the direct HTTP example
+accepts an explicit `0`.
+
 | Variable | Required | Default | What it is |
 |---|---|---|---|
 | `XMR_PRIMARY_ADDRESS` | yes | none | your wallet's primary address |
@@ -131,7 +138,7 @@ Order status is cached between scans. New checkouts and connected streams use th
 
 The HTTP example persists orders to its JSON ledger; the library `createPaymentAgent()` defaults to memory. Persist the wallet as well as orders for restart recovery. See [STORAGE.md](STORAGE.md).
 
-Expiry and paid retention default to disabled. Expiry removes only orders with a successful check and no detected funds; it does not return a payment or stop the address receiving funds. Retention preserves paid orders with an undelivered webhook. Retired orders and receipts return `404`, so keep records in the store for accounting and support.
+Expiry and paid retention default to disabled in the direct HTTP example. The CLI wizard configures 24-hour expiry and 168-hour paid retention. Expiry removes only orders with a successful check and no detected funds; it does not return a payment or stop the address receiving funds. Retention preserves paid orders with an undelivered webhook. Retired orders and receipts return `404`, so keep records in the store for accounting and support.
 
 ## Node trust and network access
 

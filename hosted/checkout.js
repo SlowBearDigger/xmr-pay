@@ -67,7 +67,7 @@
     var left = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000));
     if (left <= 0) {
       timer.classList.add('elapsed');
-      timer.lastElementChild.innerHTML = 'Rate window elapsed — the address still works; reload for a current rate';
+      timer.lastElementChild.innerHTML = 'Rate window elapsed: the address still works; reload for a current rate';
       clearInterval(iv);
       return;
     }

@@ -4,7 +4,18 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.0] - Unreleased
+
+### Migration
+
+- Set `AGENT_TOKEN` on every bind, including loopback; keep it on the merchant backend.
+- Send order creation as a JSON object with `Content-Type: application/json`; invalid payload types are rejected.
+- Keep wallet and order files together and stop on persistence errors. Existing engine installations must apply the dependency overrides in `SECURITY.md` and reinstall.
+- Review expiry in existing CLI config: the wizard writes `expiryHours: 24` and `paidRetentionHours: 168`; use `0` to disable either. The direct HTTP example defaults both to `0`.
+
+### Changes
+
+- Report clipboard success only after a successful copy; keep the address visible when copying fails.
 
 - Apply security overrides when the CLI installs the optional Monero engine.
 - Require authentication on every agent bind, reject malformed order requests, and generate unpredictable order IDs.

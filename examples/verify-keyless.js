@@ -38,7 +38,7 @@ function createVerifyHandler({
         if (req.method === 'OPTIONS') { json(res, 204, {}); return; }
         if (req.method !== 'POST') return json(res, 405, { error: 'POST only' });
         if (token && req.headers.authorization !== `Bearer ${token}`) return json(res, 401, { error: 'unauthorized' });
-        if (rateLimited(req)) return json(res, 429, { error: 'rate limited — slow down' });
+        if (rateLimited(req)) return json(res, 429, { error: 'rate limited: slow down' });
 
         const b = parsedBody || {};
         const txid = typeof b.txid === 'string' ? b.txid.trim() : '';

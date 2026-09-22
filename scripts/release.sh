@@ -19,7 +19,7 @@ if command -v minisign >/dev/null 2>&1; then
     echo "create one once:  minisign -G -s \"$KEY\" -p minisign.pub   (commit minisign.pub)"
   fi
 else
-  echo "minisign not installed (brew install minisign) — skipping signature"
+  echo "minisign not installed (brew install minisign): skipping signature"
 fi
 
 if command -v gpg >/dev/null 2>&1 && [ -n "${GPG_SIGN:-}" ]; then

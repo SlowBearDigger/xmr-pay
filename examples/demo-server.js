@@ -13,7 +13,7 @@ try {
     info = JSON.parse(fs.readFileSync(POC_INFO, 'utf8'));
 } catch {
     console.error(`demo needs a stagenet wallet info file at ${POC_INFO}`);
-    console.error('set XMRPAY_DEMO_INFO=/path/to/info.json — it must contain');
+    console.error('set XMRPAY_DEMO_INFO=/path/to/info.json: it must contain');
     console.error('{ node, primaryAddress, orderSubaddress, restoreHeight } for a funded stagenet wallet.');
     process.exit(1);
 }

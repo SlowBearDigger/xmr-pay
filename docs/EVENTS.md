@@ -20,7 +20,7 @@ Settlement latches: the agent stops polling a paid order and does not reverse fu
 
 The agent expires an order only after a successful check with no received, pending or locked funds. A failed sync or check prevents expiry in that tick. Expired orders are removed from its store, so subsequent status requests return `404`.
 
-WooCommerce keeps orders with detected funds on hold. Its PHP watch scanner reads blocks and may not see unmined transfers. Native proof mode depends on the buyer submitting a transaction ID. A late or unseen payment can therefore require manual reconciliation after expiry. Automatic expiry defaults to disabled (`0`).
+WooCommerce keeps orders with detected funds on hold. Its PHP watch scanner reads blocks and may not see unmined transfers. Native proof mode depends on the buyer submitting a transaction ID. A late or unseen payment can therefore require manual reconciliation after expiry. WooCommerce native expiry defaults to disabled (`0`). The direct HTTP example also defaults to `0`, but the CLI wizard saves 24-hour expiry and 168-hour paid retention.
 
 ## Delivered webhook: `order.paid`
 

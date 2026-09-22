@@ -6,7 +6,7 @@
 <meta name="referrer" content="no-referrer" />
 <title>Pay with Monero</title>
 <!--
-  xmr-pay portable checkout — a SINGLE static page. Zero server, zero CDN, zero third
+  xmr-pay portable checkout: a SINGLE static page. Zero server, zero CDN, zero third
   parties: the QR is generated locally by the widget, the fonts are the system's, and the
   only network call is the one YOU configure (your verify/status endpoint, or none at all
   in proof mode). The order id / address is the only capability.
@@ -16,7 +16,7 @@
 
     checkout.html#address=4ADDRESS&amount=0.05&label=Order%2042&expires=1718900000
 
-  Params (fragment `#` preferred — it never reaches a server):
+  Params (fragment `#` preferred: it never reaches a server):
     address           a Monero address (or use `config` for a signed envelope)
     config            base64 signed-config envelope (tamper-evident address)
     amount            XMR to charge (omit for an open/tip amount)

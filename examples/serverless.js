@@ -34,7 +34,7 @@ module.exports = async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
     if (VERIFY_TOKEN && req.headers.authorization !== `Bearer ${VERIFY_TOKEN}`) return res.status(401).json({ error: 'unauthorized' });
-    if (rateLimited(req)) return res.status(429).json({ error: 'rate limited — slow down' });
+    if (rateLimited(req)) return res.status(429).json({ error: 'rate limited: slow down' });
     const { order_id, txid, proof } = req.body || {};
 
     const order = ORDERS.get(order_id);

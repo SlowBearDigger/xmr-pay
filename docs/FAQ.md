@@ -39,7 +39,7 @@ Confirmations reduce reorganisation risk; no fixed count guarantees finality. Th
 
 Watch mode sums payments to the order's subaddress. A recorded partial payment remains open for a top-up. Proof verification checks one transaction at a time.
 
-Automatic expiry is disabled by default. If enabled, it uses the evidence the scanner has seen. PHP watch mode scans blocks and can miss a payment still in the mempool. Native proof mode cannot detect a payment the buyer has not submitted. A payment arriving after expiry still reaches the wallet but may need manual reconciliation. See [states and events](EVENTS.md).
+WooCommerce native modes and the direct HTTP example default expiry to disabled. The CLI wizard instead saves 24-hour expiry and 168-hour paid retention; set those config values to `0` to disable them. If enabled, it uses the evidence the scanner has seen. PHP watch mode scans blocks and can miss a payment still in the mempool. Native proof mode cannot detect a payment the buyer has not submitted. A payment arriving after expiry still reaches the wallet but may need manual reconciliation. See [states and events](EVENTS.md).
 
 ## Are refunds automatic?
 

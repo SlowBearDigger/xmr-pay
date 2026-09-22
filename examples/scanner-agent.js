@@ -58,9 +58,9 @@ function send(res, code, body) {
         syncTimeoutMs: intEnv('XMR_SYNC_TIMEOUT_MS', 120000),
     });
 
-    if (!scanner.viewOnly) { console.error('REFUSING TO START: the wallet holds a spend key — use a VIEW-ONLY key'); process.exit(1); }
+    if (!scanner.viewOnly) { console.error('REFUSING TO START: the wallet holds a spend key: use a VIEW-ONLY key'); process.exit(1); }
     console.log(`scanner up · node ${scanner.node} · view-only · birthday height ${scanner.birthdayHeight}`);
-    if (!env.XMR_WALLET_PATH) console.warn('[warn] XMR_WALLET_PATH not set — set it so the wallet keeps its scan state across restarts (orders persist, but a fresh wallet starts at the tip).');
+    if (!env.XMR_WALLET_PATH) console.warn('[warn] XMR_WALLET_PATH not set: set it so the wallet keeps its scan state across restarts (orders persist, but a fresh wallet starts at the tip).');
 
     const store = loadOrders(ORDERS_FILE);
     console.log(`orders: ${store.size} reloaded from ${ORDERS_FILE}`);
@@ -73,8 +73,8 @@ function send(res, code, body) {
         else { pem = generateSigningKey().privateKey; fs.writeFileSync(RECEIPT_KEY_FILE, pem, { mode: 0o600 }); console.log(`[receipt] generated a new signing key → ${RECEIPT_KEY_FILE}`); }
         receiptKey = pem;
         receiptFp = configFingerprint(crypto.createPublicKey(pem).export({ type: 'spki', format: 'pem' }));
-        console.log(`[receipt] signing fingerprint ${receiptFp}  — publish this so buyers can pin it`);
-    } catch (e) { console.warn(`[receipt] disabled — could not load/create a signing key: ${e.message}`); }
+        console.log(`[receipt] signing fingerprint ${receiptFp} : publish this so buyers can pin it`);
+    } catch (e) { console.warn(`[receipt] disabled: could not load/create a signing key: ${e.message}`); }
 
     function buildWebhookPayload(order) {
         return {
@@ -106,7 +106,7 @@ function send(res, code, body) {
 
             const backoff = Math.min(1800000, 5000 * 2 ** Math.min(order.webhookAttempts - 1, 8));
             order.webhookNextAt = Date.now() + backoff;
-            console.warn(`[webhook] ${orderId} undelivered (attempt ${order.webhookAttempts}, ${(res && (res.status || res.error)) || '?'}) — retry in ${Math.round(backoff / 1000)}s`);
+            console.warn(`[webhook] ${orderId} undelivered (attempt ${order.webhookAttempts}, ${(res && (res.status || res.error)) || '?'}): retry in ${Math.round(backoff / 1000)}s`);
         }
         saveOrders(ORDERS_FILE, store);
     }
@@ -289,7 +289,7 @@ function send(res, code, body) {
                 return send(res, 200, r.receipt);
             }
             send(res, 404, { error: 'not found' });
-        } catch (e) { send(res, 500, { error: 'agent error' }); }
+        } catch { send(res, 500, { error: 'agent error' }); }
     });
     server.listen(PORT, BIND, () => console.log(`payment agent on http://${BIND}:${PORT}  (POST /order · GET /order/:id · GET /order/:id/stream · GET /receipt/:id · GET /healthz)`));
 
