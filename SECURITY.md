@@ -61,16 +61,16 @@ at install time. Payment links, QR, signed configs, and the widget need nothing
 else.
 
 On-chain verification needs `monero-ts`: a large WASM library, declared as an
-**optional peer dependency**. Install it for the server-side WASM verifier or watch scanner; the buyer-facing checkout never loads it. `monero-ts` pins two old
-transitive dependencies that currently carry advisories:
+**optional peer dependency**. Install it for the server-side WASM verifier or watch scanner; the buyer-facing checkout never loads it. The qualified engine is `monero-ts` 0.11.22. Older installations may retain
+these vulnerable transitive dependencies:
 
 | Package | Advisory | Reachable here? |
 |---|---|---|
 | `serialize-javascript` `^3.1.0` | High: RCE via crafted object ([GHSA-5c6j-r48x-rmvq](https://github.com/advisories/GHSA-5c6j-r48x-rmvq)) | Low: `monero-ts` serializes wallet state built from *your* keys, not buyer input. |
 | `uuid` `3.3.2` | Moderate: buffer bounds, only when a `buf` arg is passed ([GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq)) | No: `monero-ts` generates ids without a buffer. |
 
-`monero-ts` hasn't bumped them upstream. Patch them in your deployment with npm
-`overrides`: the resolved versions have been exercised with the wallet; test your deployment after reinstalling:
+Update the engine and refresh the lockfile in your deployment. Older engine
+installations can use these npm overrides; test your deployment after reinstalling:
 
 ```json
 {
@@ -96,7 +96,11 @@ and the default node list is literally a list of URLs. Assess whether the destin
 
 ## Verifying releases
 
-Releases are signed with minisign, key pinned in the README:
-`RWSA/E4ogu5/1mQf2r66pkWK9fYBEeFdf2cvrjkhiALoXCWT3woSSRtH`. The widget is
-reproducible: `npm ci && npm run build` must match `SHA256SUMS`. A release
-that fails verification is itself a security report.
+Releases from 2.0.0 use an SSH signature over the widget and npm tarball
+checksums. Verify the downloaded files with `scripts/verify-release.sh` from a
+trusted checkout of the matching tag. The public signer and verification steps
+are in the README; the private signing key remains local.
+
+Historical 1.x releases retain their Minisign signature and pinned public key:
+`RWSA/E4ogu5/1mQf2r66pkWK9fYBEeFdf2cvrjkhiALoXCWT3woSSRtH`.
+A signature or hash mismatch is a security report.
