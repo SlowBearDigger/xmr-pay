@@ -2557,12 +2557,30 @@ class XmrPay extends HTMLElement {
         return XP_STR[lang] || XP_STR.en;
     }
 
-    _uri() {
+    _uri(amount) {
         var label = this.getAttribute('label');
         var p = [];
-        if (this._amount) p.push('tx_amount=' + encodeURIComponent(xpNormAmount(this._amount)));
+        if (amount == null) amount = this._amount;
+        if (amount) p.push('tx_amount=' + encodeURIComponent(xpNormAmount(amount)));
         if (label) p.push('tx_description=' + encodeURIComponent(label));
         return 'monero:' + (this._addr || '') + (p.length ? '?' + p.join('&') : '');
+    }
+
+    _updatePaymentAmount(root, amount) {
+        amount = xpNormAmount(amount);
+        if (!/^\d+(\.\d{1,12})?$/.test(amount) || !/[1-9]/.test(amount)) return null;
+        var uri = this._uri(amount);
+        var wallet = root.querySelector('.sec > .wallet');
+        var qr = root.querySelector('.qrwrap .qr');
+        var svg;
+        try {
+            svg = wallet && qr && wallet.getAttribute('href') === uri ? qr.innerHTML : xpQrSvg(uri);
+        } catch { return null; }
+        if (wallet) wallet.setAttribute('href', uri);
+        if (qr) qr.innerHTML = svg;
+        var price = root.querySelector('.amt');
+        if (price) price.textContent = amount + ' XMR';
+        return { uri: uri, svg: svg };
     }
 
     _render() {
@@ -2794,14 +2812,13 @@ class XmrPay extends HTMLElement {
             if (out.shortfallXmr != null) {
 
                 msg = t.topupMsg.replace('{r}', recv).replace('{s}', out.shortfallXmr);
-                if (topup) {
-                    var tUri = 'monero:' + (this._addr || '') + '?tx_amount=' + encodeURIComponent(out.shortfallXmr);
-                    var tLbl = this.getAttribute('label'); if (tLbl) tUri += '&tx_description=' + encodeURIComponent(tLbl);
+                var payment = this._updatePaymentAmount(root, out.shortfallXmr);
+                if (topup && payment) {
                     topup.innerHTML =
                         '<div class="lbl">' + t.topupTitle + '</div>' +
                         '<div class="ta">' + xpEsc(out.shortfallXmr) + ' XMR</div>' +
-                        '<div class="tq">' + xpQrSvg(tUri) + '</div>' +
-                        '<a class="wallet" href="' + xpEsc(tUri) + '">' + t.openWallet + '</a>';
+                        '<div class="tq">' + payment.svg + '</div>' +
+                        '<a class="wallet" href="' + xpEsc(payment.uri) + '">' + t.openWallet + '</a>';
                     topup.className = 'topup';
                 }
             } else {
@@ -2871,9 +2888,14 @@ class XmrPay extends HTMLElement {
             this._success(root, out, t);
             return;
         }
+        var status = out && out.status;
+        if ((status === 'partial' || status === 'underpaid') && out.shortfallXmr != null) {
+            this._updatePaymentAmount(root, out.shortfallXmr);
+        } else if (status === 'pending') {
+            this._updatePaymentAmount(root, this._amount);
+        }
         var wst = root.querySelector('.wst');
         if (wst) {
-            var status = out && out.status;
             var msg;
 
             if (status === 'mempool') msg = t.mempool;

@@ -25,3 +25,7 @@ hosted/xmr-pay.js
 
 # npm pack artifacts
 *.tgz
+
+# Locally signed release output is uploaded separately.
+/release/
+SHA256SUMS.sig

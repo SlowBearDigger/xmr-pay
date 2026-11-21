@@ -1,43 +1,54 @@
-# Manual release workflow; requires signing and npm credentials.
+# Upload locally signed assets to the tagged GitHub release before dispatching.
 name: release
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write      # attach release assets
-  id-token: write      # npm provenance (Sigstore)
+  contents: read
+  id-token: write # npm provenance; the SSH private key never enters CI.
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '20'
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - run: npm run build
-      - run: npm test --if-present
-
-      # signed checksums
-      - name: minisign
+          package-manager-cache: false
+      - name: Require the package version tag
         run: |
-          sudo apt-get update && sudo apt-get install -y minisign
-          printf '%s' "${{ secrets.MINISIGN_KEY }}" > minisign.key
-          bash scripts/release.sh
-          rm -f minisign.key
+          version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_TYPE" = tag
+          test "$GITHUB_REF_NAME" = "v$version"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Download and verify locally signed assets
         env:
-          MINISIGN_KEY: minisign.key
-
-      - name: github release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            SHA256SUMS
-            SHA256SUMS.minisig
-            widget/xmr-pay.js
-
-      - run: npm publish --provenance --access public
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --pattern SHA256SUMS.sig \
+            --pattern xmr-pay.js --pattern "xmr-pay-$version.tgz" \
+            --dir "$RUNNER_TEMP/xmrpay-signed"
+          bash scripts/verify-release.sh "$RUNNER_TEMP/xmrpay-signed"
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run test:release
+      - name: Rebuild and compare the signed artifacts
+        run: |
+          bash scripts/release.sh --prepare "$RUNNER_TEMP/xmrpay-built"
+          version="$(node -p "require('./package.json').version")"
+          for file in SHA256SUMS xmr-pay.js "xmr-pay-$version.tgz"; do
+            cmp "$RUNNER_TEMP/xmrpay-signed/$file" "$RUNNER_TEMP/xmrpay-built/$file"
+          done
+      - name: Publish the verified CI build with provenance
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          npm publish "$RUNNER_TEMP/xmrpay-built/xmr-pay-$version.tgz" \
+            --ignore-scripts --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

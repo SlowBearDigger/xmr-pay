@@ -58,6 +58,78 @@ ok('a receipt envelope has no config field', asConfigShaped.config === undefined
 ok('non-envelope rejected', !verifyReceipt({ nope: 1 }).valid);
 ok('signReceipt refuses a non-receipt body', (() => { try { signReceipt({ foo: 1 }, merchant.privateKey); return false; } catch { return true; } })());
 
+async function contributionPolicyTests() {
+    // Exercise the real receipt and verification policies; only native RPC answers are simulated.
+    const Module = require('node:module');
+    const originalLoad = Module._load;
+    const originalFetch = global.fetch;
+    const otherTxid = 'b'.repeat(64);
+    let amounts = { [txid]: 20000000n, [otherTxid]: 30000000n };
+    let confirmations = { [txid]: 25, [otherTxid]: 5 };
+    let unlock = {}, inPool = false, missingUnlock = false;
+    const native = {
+        async createWalletFull() {
+            return {
+                async setDaemonConnection() {}, async isConnectedToDaemon() { return true; },
+                async checkTxProof(id) { return { isGood: true, receivedAmount: amounts[id].toString(), numConfirmations: confirmations[id], inTxPool: inPool }; },
+            };
+        },
+    };
+    Module._load = function (name) { return name === 'monero-ts' ? native : originalLoad.apply(this, arguments); };
+    global.fetch = async (url, options) => {
+        if (String(url).endsWith('/get_height')) return { ok: true, json: async () => ({ height: 5000 }) };
+        const id = JSON.parse(options.body).txs_hashes[0];
+        return { ok: !missingUnlock, json: async () => ({ txs: [{ tx_hash: id, as_json: JSON.stringify({ unlock_time: unlock[id] || 0 }) }] }) };
+    };
+    const splitReceipt = amount => signReceipt(receiptFromOrder({ ...order, amount, receivedPico: (amounts[txid] + amounts[otherTxid]).toString(), txids: [txid, otherTxid] }, {
+        network: 'mainnet', txProofs: [txid, otherTxid].map(id => ({ txid: id, signature: 'InProofV2abc', message: '' })),
+    }), merchant.privateKey);
+    const check = (receipt, depth) => verifyReceiptOnChain(receipt, { nodes: ['http://receipt-policy-node'], minConfirmations: depth });
+    try {
+        const split = splitReceipt('0.00005');
+        let result = await check(split, 1);
+        ok('split receipt sums exact confirmed contributions', result.valid && result.confirmedPico === '50000000');
+        ok('split receipt preserves per-transaction underpaid status', result.perTx.every(tx => tx.status === 'underpaid' && tx.ok));
+        for (const amountPico of ['0', '-1']) {
+            const invalidAmount = signReceipt({ ...split.receipt, amountPico }, merchant.privateKey);
+            ok('nonpositive receipt amount remains rejected: ' + amountPico, !(await check(invalidAmount, 1)).valid);
+        }
+        result = await check(split, 100);
+        ok('split receipt rejects a depth above every contribution', !result.valid && result.confirmedPico === '0');
+        result = await check(split, 10);
+        ok('split receipt counts only contributions meeting the requested depth', !result.valid && result.confirmedPico === '20000000');
+
+        confirmations = { [txid]: 0, [otherTxid]: 0 }; inPool = true;
+        result = await check(split, 1);
+        ok('unconfirmed partial contributions cannot satisfy a confirmed receipt', !result.valid && result.confirmedPico === '0');
+        result = await check(split, 0);
+        ok('explicit zero-confirmation policy remains supported', result.valid && result.confirmedPico === '50000000');
+        confirmations = { [txid]: 25, [otherTxid]: 5 }; inPool = false;
+
+        unlock = { [txid]: 6000 };
+        result = await check(split, 1);
+        ok('future height lock excludes a partial contribution', !result.valid && result.confirmedPico === '30000000');
+        unlock = { [txid]: 4000 };
+        ok('elapsed height lock remains acceptable', (await check(split, 1)).valid);
+        unlock = { [txid]: Math.floor(Date.now() / 1000) + 3600 };
+        result = await check(split, 1);
+        ok('future timestamp lock excludes a partial contribution', !result.valid && result.confirmedPico === '30000000');
+        unlock = { [txid]: 1000000000 };
+        ok('elapsed timestamp lock remains acceptable', (await check(split, 1)).valid);
+        missingUnlock = true;
+        result = await check(split, 1);
+        ok('unavailable unlock policy fails closed for partial contributions', !result.valid && result.confirmedPico === '0');
+        missingUnlock = false; unlock = {};
+
+        amounts = { [txid]: 1n, [otherTxid]: 9007199254740992n };
+        result = await check(splitReceipt('9007.199254740993'), 1);
+        ok('one-pico and above-safe-integer contributions retain exact sums', result.valid && result.confirmedPico === '9007199254740993');
+    } finally {
+        Module._load = originalLoad;
+        global.fetch = originalFetch;
+    }
+}
+
 // on-chain leg: structural guards without a live node
 (async () => {
     const noProofs = await verifyReceiptOnChain(env, { nodes: ['http://x'] });
@@ -73,6 +145,7 @@ ok('signReceipt refuses a non-receipt body', (() => { try { signReceipt({ foo: 1
     t2.receipt.amountPico = '1';
     const bad = await verifyReceiptOnChain(t2, { nodes: ['http://x'] });
     ok('on-chain: tampered receipt fails on the signature first', !bad.valid && /signature/.test(bad.reason));
+    await contributionPolicyTests();
 
     console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILED'}  ${pass} passed, ${fail} failed`);
     process.exit(fail === 0 ? 0 : 1);

@@ -1,7 +1,7 @@
 // Sign and verify payment receipts.
 const crypto = require('crypto');
 const { canonical, configFingerprint } = require('./config');
-const { verifyPayment, xmrToPico, picoToXmrString, isValidTxid } = require('./verify');
+const { verifyPayment, xmrToPico, isValidTxid } = require('./verify');
 
 const RECEIPT_TYP = 'xmr-pay.receipt/1';
 
@@ -96,23 +96,28 @@ async function verifyReceiptOnChain(envelope, { nodes, networkType, minConfirmat
         return { valid: false, reason: 'at least one node URI is required for on-chain verification', confirmedPico: '0', needPico: r.amountPico, perTx: [] };
     }
     const net = networkType || r.network || 'mainnet';
-    const amountXmr = picoToXmrString(r.amountPico);
+    const need = BigInt(r.amountPico);
+    if (need <= 0n) {
+        return { valid: false, reason: 'receipt amount must be greater than zero', confirmedPico: '0', needPico: need.toString(), perTx: [] };
+    }
 
     const perTx = [];
     let confirmed = 0n;
     for (const p of proofs) {
         const res = await verifyPayment({
             txid: p.txid, proof: p.signature, address: p.address || r.address,
-            message: p.message || '', amount: amountXmr, nodes, networkType: net, minConfirmations, quorum,
+            // Each positive contribution must pass confirmation and unlock checks.
+            // Enforce the invoice amount on the aggregate below.
+            message: p.message || '', amount: '0.000000000001', nodes, networkType: net, minConfirmations, quorum,
         });
 
-        const counted = res.status === 'paid' || res.status === 'underpaid';
+        const counted = res.paid === true && res.status === 'paid';
         const pico = counted && res.receivedPico != null ? BigInt(res.receivedPico) : 0n;
         if (counted) confirmed += pico;
-        perTx.push({ txid: p.txid, status: res.status, ok: counted, receivedPico: pico.toString(), confirmations: res.confirmations | 0 });
+        const status = counted && pico < need ? 'underpaid' : res.status;
+        perTx.push({ txid: p.txid, status, ok: counted, receivedPico: pico.toString(), confirmations: res.confirmations | 0 });
     }
 
-    const need = BigInt(r.amountPico);
     const allProofsValid = perTx.every(t => t.ok);
     const enough = confirmed >= need;
     const valid = allProofsValid && enough;

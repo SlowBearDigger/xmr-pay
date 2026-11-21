@@ -42,7 +42,7 @@ stagenet before deploying a change. The [demo](https://demo.xmrpay.shop) uses te
 
 ## Release version
 
-The prepared release is **2.0.0**. [Versioning](docs/VERSIONING.md) reserves v3 for
+The current release is **2.0.0**. [Versioning](docs/VERSIONING.md) reserves v3 for
 FCMP++ and Carrot. Follow the migration notes in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
@@ -431,24 +431,72 @@ never required:
 <summary><b>Build the widget yourself and verify a download</b></summary>
 
 The widget is a plain concatenation of `widget/xmr-pay.part.js` and the vendored
-`qrcode-generator` (`src/vendor/`): no minifier, no timestamps, no npm install:
+`qrcode-generator` (`src/vendor/`): no minifier or timestamps. Rebuild with
+`npm run build`.
 
-```
-npm run build
-shasum -a 256 widget/xmr-pay.js     # must match SHA256SUMS in the release
+### Verify a 2.x release
+
+Use a trusted checkout of the matching release tag, Bash 4+, Node.js and OpenSSH
+with `ssh-keygen -Y` support. Download these four assets from its GitHub release
+into one directory: `xmr-pay.js`, `xmr-pay-2.0.0.tgz`, `SHA256SUMS` and
+`SHA256SUMS.sig`. From the trusted checkout, run:
+
+```bash
+bash scripts/verify-release.sh /path/to/downloads
 ```
 
-Each release ships `SHA256SUMS` plus a minisign signature. Public key (also
-`minisign.pub` in this repo): `RWSA/E4ogu5/1mQf2r66pkWK9fYBEeFdf2cvrjkhiALoXCWT3woSSRtH`
+The verifier uses `.github/release.allowed_signers` from that checkout, requires
+the `releases@xmrpay.shop` namespace and `xmrpay-release` identity, then checks the
+two exact filenames and SHA-256 hashes. The Ed25519 public key fingerprint is
+`SHA256:Xyn8dVyPHV1duuL2Dgg4oMGtNjidiFvXa+2dppNqHao`. Establish trust in that key
+independently; replacing both the verifier and its trusted key defeats this check.
+The tarball also includes the public signer file and verifier. If verification
+fails, do not install or serve the files.
 
+### Prepare and publish
+
+From the exact version tag, run the tests and sign locally:
+
+```bash
+npm ci --ignore-scripts
+npm test
+npm run test:release
+XMRPAY_SIGNING_KEY=/path/to/local/ssh-signing-key bash scripts/release.sh
 ```
+
+The script requires a local signing key and creates a fresh `release/` directory
+containing the widget, npm tarball, two-file checksum manifest and SSH signature.
+It refuses to overwrite an existing output directory; an optional output path can
+follow the command. `bash scripts/release.sh --prepare /path/to/new-output`
+builds the same files without signing, for CI comparisons.
+
+Create the matching GitHub release, upload all four assets locally, then dispatch
+the release workflow on that tag:
+
+```bash
+gh release upload v2.0.0 release/xmr-pay.js release/xmr-pay-2.0.0.tgz \
+  release/SHA256SUMS release/SHA256SUMS.sig
+gh workflow run release.yml --ref v2.0.0
+```
+
+CI requires the tag to match `package.json`, verifies the uploaded signature,
+runs the tests, and rebuilds and compares every asset before publishing the
+CI-built tarball to npm with provenance. Only the publish step receives
+`NPM_TOKEN`; the SSH private key stays local. CI needs read access to release
+assets and OIDC permission for npm provenance. The workflow and tag must come
+from a trusted maintainer: asset signatures do not protect a compromised workflow
+or publishing token.
+
+### Historical 1.x releases
+
+Keep using their existing Minisign signature and public key (`minisign.pub`):
+
+```bash
 minisign -Vm SHA256SUMS -P RWSA/E4ogu5/1mQf2r66pkWK9fYBEeFdf2cvrjkhiALoXCWT3woSSRtH
 shasum -a 256 -c SHA256SUMS
 ```
 
-From npm the package is published with provenance (`npm view xmr-pay --json | grep
-provenance`). If a signature or hash does not match, do not use the file, and report
-it.
+The 2.x SSH release flow does not replace historical 1.x signatures.
 
 </details>
 

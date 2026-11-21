@@ -4,7 +4,7 @@ All notable changes to `xmr-pay` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-11-21
 
 ### Migration
 
@@ -14,6 +14,10 @@ All notable changes to `xmr-pay` are documented here. The format follows
 - Review expiry in existing CLI config: the wizard writes `expiryHours: 24` and `paidRetentionHours: 168`; use `0` to disable either. The direct HTTP example defaults both to `0`.
 
 ### Changes
+
+- Request only the remaining amount in Watch-mode wallet links and QR codes after a partial payment.
+- Enforce the configured minimum confirmation depth when verifying receipt proofs.
+- Sign 2.x release checksums with a local SSH key; CI verifies and reproduces the signed assets before publishing to npm with provenance. Historical 1.x Minisign verification remains available.
 
 - Report clipboard success only after a successful copy; keep the address visible when copying fails.
 

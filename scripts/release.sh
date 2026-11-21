@@ -1,28 +1,44 @@
 #!/usr/bin/env bash
-# Build release checksums and apply configured signatures.
+# Prepare reproducible release assets; keep SSH signing on the maintainer's machine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+prepare=false
+if [[ "${1:-}" == --prepare ]]; then
+  prepare=true
+  shift
+fi
+if [[ $# -gt 1 || "${1:-}" == --* ]]; then
+  echo "Usage: $0 [--prepare] [OUTPUT_DIRECTORY]" >&2
+  exit 1
+fi
+output="${1:-release}"
+if [[ "$prepare" == false && ! -f "${XMRPAY_SIGNING_KEY:-}" ]]; then
+  echo 'Set XMRPAY_SIGNING_KEY to your local SSH signing key, or use --prepare for unsigned CI builds.' >&2
+  exit 1
+fi
+if [[ -e "$output" || -L "$output" ]]; then
+  echo "Refusing to overwrite release output: $output" >&2
+  exit 1
+fi
+version="$(node -p "require('./package.json').version")"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo 'Invalid package version for release filenames.' >&2
+  exit 1
+fi
+tarball="xmr-pay-$version.tgz"
+
 bash scripts/build-widget.sh
-
-FILES="widget/xmr-pay.js src/core.js src/verify.js src/watch.js src/scanner.js src/agent.js src/config.js src/receipt.js src/webhook.js"
-shasum -a 256 $FILES > SHA256SUMS
-echo "--- SHA256SUMS ---"; cat SHA256SUMS; echo
-
-if command -v minisign >/dev/null 2>&1; then
-  KEY="${MINISIGN_KEY:-$HOME/.minisign/xmr-pay.key}"
-  if [ -f "$KEY" ]; then
-    minisign -S -s "$KEY" -m SHA256SUMS
-    echo "signed -> SHA256SUMS.minisig"
-  else
-    echo "no minisign key at $KEY"
-    echo "create one once:  minisign -G -s \"$KEY\" -p minisign.pub   (commit minisign.pub)"
-  fi
-else
-  echo "minisign not installed (brew install minisign): skipping signature"
+mkdir -p -- "$output"
+cp -- widget/xmr-pay.js "$output/xmr-pay.js"
+npm pack --ignore-scripts --quiet --pack-destination "$output"
+test -f "$output/$tarball"
+(
+  cd -- "$output"
+  sha256sum -- xmr-pay.js "$tarball" > SHA256SUMS
+)
+if [[ "$prepare" == false ]]; then
+  ssh-keygen -Y sign -f "$XMRPAY_SIGNING_KEY" -n releases@xmrpay.shop "$output/SHA256SUMS"
+  bash scripts/verify-release.sh "$output"
 fi
-
-if command -v gpg >/dev/null 2>&1 && [ -n "${GPG_SIGN:-}" ]; then
-  gpg --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
-  echo "signed -> SHA256SUMS.asc"
-fi
+printf 'Release assets prepared in %s\n' "$output"

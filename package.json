@@ -42,7 +42,9 @@
     "docs/EVENTS.md",
     "docs/VERSIONING.md",
     "SECURITY.md",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    ".github/release.allowed_signers",
+    "scripts/verify-release.sh"
   ],
   "license": "MIT",
   "author": "SlowBearDigger",
@@ -83,7 +85,8 @@
     "test:summing": "node test/live-summing.js",
     "test:agent": "node test/live-agent.js",
     "agent": "node examples/scanner-agent.js",
-    "demo": "node examples/demo-server.js"
+    "demo": "node examples/demo-server.js",
+    "test:release": "node test/release.test.js"
   },
   "devDependencies": {
     "@stryker-mutator/core": "^9.6.1",

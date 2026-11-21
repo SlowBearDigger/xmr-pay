@@ -7,3 +7,7 @@ SHA256SUMS.asc
 # audit / scratch docs — local only, never published (contain local paths)
 docs/PENTEST-REPORT.md
 docs/code-issues.md
+
+# Locally signed release output is uploaded separately.
+/release/
+SHA256SUMS.sig
