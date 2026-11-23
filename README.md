@@ -47,8 +47,11 @@ FCMP++ and Carrot. Follow the migration notes in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
+Download `xmr-pay-2.0.0.tgz` from the [GitHub release](https://github.com/SlowBearDigger/xmr-pay/releases/tag/v2.0.0),
+[verify the release assets](#verify-a-2x-release), then install the local tarball:
+
 ```
-npm i xmr-pay                 # links, QR and widget
+npm i ./xmr-pay-2.0.0.tgz      # links, QR and widget
 # For WASM verification, also install monero-ts with the overrides in SECURITY.md.
 ```
 
@@ -63,7 +66,7 @@ test with no real money:
 > **Verify:** `verifyPayment({ networkType: 'stagenet', ... })`.
 > **Agent:** the `XMR_NETWORK=stagenet` env var (the `npx xmr-pay` wizard asks).
 
-**Run the agent in one command** (non-custodial; it holds only your view key):
+**Run the agent from the install directory** (non-custodial; it holds only your view key):
 
 ```
 npx xmr-pay        # setup wizard (address + view key + node), then it runs
